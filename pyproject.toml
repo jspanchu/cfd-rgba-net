@@ -1,0 +1,28 @@
+[project]
+name = "cfd-rgba-net"
+version = "0.1.0"
+description = "Learned color & opacity transfer functions for CFD flow features"
+requires-python = ">=3.12"
+dependencies = [
+    "huggingface_hub>=2.1.1",
+    "torch>=2.4.0",
+    "numpy",
+    "pandas",
+    "scipy",
+    "vtk==9.7.1",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cuda" }
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+
+[tool.ty.environment]
+python = ".venv"
