@@ -390,7 +390,7 @@ def main():
         writer = vtkXMLImageDataWriter(file_name=file_name)
         writer.input_data = image
         writer.Write()
-    if not args.save_vti:
+    if args.save_vti:
         write_image(outputs / f"{tag}_inputs.vti", {
             "U_nd": U,
             "Cp": Cp,
