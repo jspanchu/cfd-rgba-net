@@ -45,6 +45,7 @@ Input is one AhmedML run. Output is three vtkImageData volumes (+ .npz) for trai
 import argparse
 import csv
 import numpy as np
+import math
 import os
 import time
 import json
@@ -53,7 +54,7 @@ from scipy.stats import spearmanr
 
 from pathlib import Path
 
-from vtkmodules.util.numpy_support import numpy_to_vtk
+from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 from vtkmodules.vtkAcceleratorsVTKmFilters import vtkmFilterOverrides
 from vtkmodules.vtkCommonCore import vtkSMPTools
 from vtkmodules.vtkCommonDataModel import vtkUnstructuredGrid, vtkDataObject, vtkImageData
@@ -74,6 +75,11 @@ os.environ["OMP_NUM_THREADS"] = str(nthreads)
 os.environ["MKL_NUM_THREADS"] = str(nthreads)
 os.environ["OPENBLAS_NUM_THREADS"] = str(nthreads)
 
+import tack
+import tack.dataset as td
+from tack.interop.vtk import vtk_to_dataset
+tack.set_default_device("cuda")
+
 def log(msg, t0):
     print(f"[{time.time()-t0:6.0f}s] {msg}", flush=True)
 
@@ -89,6 +95,36 @@ def read(file_name: str | os.PathLike):
         return reader.output
     else:
         raise RuntimeError()
+
+@tack.kernel
+def _lambda2_kernel(G, out):
+    """
+    G: (N,) mat3 f64 velocity gradient tensors. out: (N,) f32 or f64.
+    Writes the middle eigenvalue of M = S^2 + Omega^2.
+    """
+    for k in range(G.shape[0]):
+        g = G[k]
+        gt = g.transpose()
+        S = 0.5 * (g + gt)
+        W = 0.5 * (g - gt)
+        M = S @ S + W @ W
+        # M is symmetric: closed-form eigenvalues (Smith 1961, trigonometric method).
+        q = (M[0, 0] + M[1, 1] + M[2, 2]) / 3.0
+        p1 = M[0, 1] * M[0, 1] + M[0, 2] * M[0, 2] + M[1, 2] * M[1, 2]
+        d0 = M[0, 0] - q
+        d1 = M[1, 1] - q
+        d2 = M[2, 2] - q
+        p2 = d0 * d0 + d1 * d1 + d2 * d2 + 2.0 * p1
+        lam2 = q  # M = q*I: all three eigenvalues equal q
+        if p2 > 0.0:
+            p = math.sqrt(p2 / 6.0)
+            r = ((M - q * tack.identity(3)) * (1.0 / p)).determinant() * 0.5
+            r = min(max(r, -1.0), 1.0)
+            phi = math.acos(r) / 3.0
+            e1 = q + 2.0 * p * math.cos(phi)                       # largest
+            e3 = q + 2.0 * p * math.cos(phi + 2.0 * math.pi / 3.0)  # smallest
+            lam2 = 3.0 * q - e1 - e3                                # trace identity
+        out[k] = lam2
 
 def eigen_values_lambda2(G, n_chunk=2_000_000):
     """
@@ -106,6 +142,117 @@ def eigen_values_lambda2(G, n_chunk=2_000_000):
         M = S @ S + W @ W
         out[i:i+n_chunk] = np.linalg.eigvalsh(M)[:, 1]
     return out
+
+@tack.kernel
+def _scale_sanitize_gradient(J, scale, G, n_bad):
+    """
+    J: (N,) vec9 velocity gradient, d(u_i)/d(x_j) at 3 * i + j.
+    G: (N,) mat3 f64, J * scale. Cells with any non-finite component are set to 0
+    and counted in n_bad[0].
+    """
+    for i in range(J.shape[0]):
+        j = J[i]
+        s = 0.0
+        for c in range(9):
+            s = s + (j[c] - j[c])  # 0 if finite, NaN if any component is NaN or inf
+        g = tack.identity(3) * 0.0
+        if s == 0.0:
+            for r in range(3):
+                for c in range(3):
+                    g[r, c] = j[3 * r + c] * scale
+        else:
+            tack.atomic_add(n_bad, 0, 1)
+        G[i] = g
+
+@tack.kernel
+def _q_and_vorticity_magnitude(G, Q, omega_mag):
+    """
+    G: (N,) mat3 non-dimensional velocity gradient.
+    Q = 0.5 * (|Omega|^2 - |S|^2) = -0.5 * tr(G G), |omega| = |curl u|.
+    """
+    for i in range(G.shape[0]):
+        g = G[i]
+        Q[i] = (-0.5 * (g[0, 0] * g[0, 0] + g[1, 1] * g[1, 1] + g[2, 2] * g[2, 2])
+                - (g[0, 1] * g[1, 0] + g[0, 2] * g[2, 0] + g[1, 2] * g[2, 1]))
+        wx = g[2, 1] - g[1, 2]
+        wy = g[0, 2] - g[2, 0]
+        wz = g[1, 0] - g[0, 1]
+        omega_mag[i] = math.sqrt(wx * wx + wy * wy + wz * wz)
+
+@tack.kernel
+def _point_quantities(U, p, inv_Uinf, p0, cp_scale, wall_tolerance, U_nd, Cp, Cpt, reversed_flow):
+    """
+    U: (N,) vec3 velocity, p: (N,) pressure. cp_scale = 2 / (rho * Uinf^2).
+    """
+    for i in range(U.shape[0]):
+        u = U[i] * inv_Uinf
+        U_nd[i] = u
+        cp = cp_scale * (p[i] - p0)
+        Cp[i] = cp
+        Cpt[i] = cp + u.dot(u)
+        reversed_flow[i] = u[0] < wall_tolerance
+
+def ingredients_tack(input_ugrid: vtkUnstructuredGrid, pName: str, UName: str, Uinf, H, p0, rho, wall_tolerance, t0):
+    """
+    The ingredients of ingredients(), computed with tack, as a tack DataSet (on the device) of the
+    input mesh with only the ingredients as point fields, for resample_tack. Differences:
+      - grad(U) is the gradient of the point-data U at each cell's center. ingredients() takes
+        vtkGradientFilter of the cell-data U; tack defines the gradient of cell data as 0.
+      - checks only holds n_cells_nonfinite_gradient.
+
+    NOTE: slow on AhmedML meshes because of tack's vtk_to_dataset (tack-core v0.6.1). A grid with
+    any VTK_POLYHEDRON cell becomes a PolyhedralTopology, built by a per-cell Python loop over
+    every cell (run 1: 21.5M cells, hours and tens of GB of host memory). It then refuses the
+    mesh: AhmedML's wedges are inside out (OpenFOAM's prism point order is the mirror of VTK's
+    wedge), so their faces run the same way as their neighbours' ("shared faces are wound the
+    same way"); vtk_to_dataset(..., orient=True) repairs that, on the host, at further cost.
+    """
+    t_conv = time.time()
+    mesh = vtk_to_dataset(input_ugrid)  # point and cell U share the name; (UName, td.H1) is the point one
+    log(f"vtk_to_dataset: {time.time() - t_conv:.1f}s", t0)
+    gradU = td.algorithms.gradients(mesh, mesh.fields[UName, td.H1], at="cells")
+    log("gradU per cell ready", t0)
+
+    n_cells = mesh.num_cells
+    G = tack.empty((n_cells,), tack.mat3(tack.f64))
+    n_bad_arr = tack.zeros((1,), tack.i32)
+    _scale_sanitize_gradient(gradU.values, H / Uinf, G, n_bad_arr)
+    del gradU
+    n_bad = int(n_bad_arr.numpy()[0])
+    log(f"non-finite gradient at {n_bad} of {n_cells:,} cells set to 0", t0)
+
+    Q = tack.empty((n_cells,), tack.f32)
+    omega_mag = tack.empty((n_cells,), tack.f32)
+    _q_and_vorticity_magnitude(G, Q, omega_mag)
+    log("Q, |omega| per cell ready", t0)
+    lambda2 = tack.empty((n_cells,), tack.f32)
+    _lambda2_kernel(G, lambda2)
+    del G
+    log("lambda2 per cell ready", t0)
+
+    checks = {"n_cells_nonfinite_gradient": n_bad}
+
+    # Distribute the derived quantities to the points (as vtkCellDataToPointData does)
+    cell_space = td.Constant(mesh)
+    point_space = td.H1(mesh)
+    point_fields = {}
+    for name, values in (("lambda2_nd", lambda2), ("Q_nd", Q), ("omega_mag_nd", omega_mag)):
+        point_fields[name] = td.algorithms.project(mesh, td.Field(cell_space, values), point_space).values
+
+    # Pointwise quantities from the point data inputs.
+    n_points = mesh.num_points
+    U_nd = tack.empty((n_points,), tack.vec3(tack.f32))
+    Cp = tack.empty((n_points,), tack.f32)
+    Cpt = tack.empty((n_points,), tack.f32)
+    reversed_flow = tack.empty((n_points,), tack.f32)
+    _point_quantities(mesh.fields[UName, td.H1].values, mesh.fields[pName, td.H1].values, 1.0 / Uinf, p0,
+                      2.0 / (rho * Uinf**2), wall_tolerance, U_nd, Cp, Cpt, reversed_flow)
+    point_fields.update(U_nd=U_nd, Cp=Cp, Cpt=Cpt, reversed_flow=reversed_flow)
+
+    # Same mesh as the input, with only the ingredients as point data. It stays on the
+    # device for resample_tack.
+    mesh.fields = {name: td.Field(point_space, values) for name, values in point_fields.items()}
+    return mesh, checks
 
 def ingredients(input: vtkUnstructuredGrid, pName: str, UName: str, Uinf, H, p0, rho, wall_tolerance, t0):
     grad_filter = vtkGradientFilter()
@@ -190,6 +337,22 @@ def ingredients(input: vtkUnstructuredGrid, pName: str, UName: str, Uinf, H, p0,
     return output, checks
 
 
+def resample_tack(vol: "td.DataSet", dims: tuple[int, int, int], bx0, bx1, by0, by1, bz0, bz1, t0):
+    """
+    vtkResampleToImage with tack: probe vol's point fields at the image points.
+    Returns {name: (n_points,) or (n_points, C) numpy array} in VTK's point order (x fastest),
+    with the valid-point mask as "vtkValidPointMask" (0 where no cell holds the point).
+    """
+    nx, ny, nz = dims
+    spacing = ((bx1 - bx0) / (nx - 1), (by1 - by0) / (ny - 1), (bz1 - bz0) / (nz - 1))
+    image = td.uniform_grid(dims, origin=(bx0, by0, bz0), spacing=spacing)
+    probed = td.algorithms.probe(vol, image)
+    point_data = {name: probed.fields[name].values.numpy() for name in vol.fields}
+    valid = probed.fields["valid"].values.numpy()
+    log(f"tack probe: {int(valid.sum()):,} of {valid.size:,} image points in the mesh", t0)
+    point_data["vtkValidPointMask"] = valid
+    return point_data
+
 def resample(vol: vtkUnstructuredGrid, dims: tuple[int, int, int], bx0, bx1, by0, by1, bz0, bz1):
     resampler = vtkResampleToImage(
         input_data_object=vol,
@@ -228,6 +391,10 @@ def main():
         help="Decides the mesh points which count as reversed. The floor is no-slip, ideally U=0 but in practice it is ~3e-17.")
     ap.add_argument("--wall-erosion-voxels", type=int, default=1,
         help="how many voxel layers to strip off the walls")
+    ap.add_argument("--use-tack", action="store_true", default=False,
+        help="Compute the ingredients with tack (gradient of point-data U at cell centers) instead of "
+             "vtkGradientFilter on cell-data U. Slow: tack's vtk_to_dataset converts the mesh cell by "
+             "cell in Python (see ingredients_tack)")
     ap.add_argument("--save-vti", action="store_true", default=False,
         help="Write the .vti files (only for viewing, the .npz have the same data)")
     args = ap.parse_args()
@@ -278,7 +445,13 @@ def main():
         if name not in (UName, "vorticityMean"):
             vol.cell_data.RemoveArray(name)
     log(f"volume n_cells={vol.number_of_cells} n_points={vol.number_of_points}", t0)
-    vol, checks = ingredients(vol, pName, UName, args.uinf, H, args.pinf, args.rho, args.wall_tolerance, t0)
+    if args.use_tack:
+        vol, checks = ingredients_tack(vol, pName, UName, args.uinf, H, args.pinf, args.rho, args.wall_tolerance, t0)
+        ingredients_computed_on = ("VTU mesh, tack gradients of point-data U at cell centers -> "
+                                   "tack project to points (cell average) -> tack probe onto the image")
+    else:
+        vol, checks = ingredients(vol, pName, UName, args.uinf, H, args.pinf, args.rho, args.wall_tolerance, t0)
+        ingredients_computed_on = "VTU mesh, cell-centered vtkGradientFilter -> vtkCellToPointData -> vtkResampleToImage"
 
     # ---- resample to image ----------------------- #
     bx0, bx1 = xmin - args.up * L, xmax + args.down * L
@@ -293,11 +466,14 @@ def main():
     bz1 = bz0 + (nz - 1) * dx
     dims = (nx, ny, nz)
     log(f"box: ({bx0}, {bx1}) x ({by0}, {by1}) x ({bz0}, {bz1})", t0)
-    img = resample(vol, dims, bx0, bx1, by0, by1, bz0, bz1)
+    if args.use_tack:
+        point_data = resample_tack(vol, dims, bx0, bx1, by0, by1, bz0, bz1, t0)
+    else:
+        point_data = resample(vol, dims, bx0, bx1, by0, by1, bz0, bz1).point_data
     log(f"resampled to {dims}", t0)
 
     def F(name):
-        a = np.asarray(img.point_data[name])
+        a = np.asarray(point_data[name])
         if a.ndim == 1:
             return a.reshape(dims, order='F') # for a[i, j, k] to work
         else:
@@ -306,7 +482,10 @@ def main():
                 channels.append(a[:, i].reshape(dims, order='F'))
             return np.stack(channels, 0) # (C, nx, ny, nz)
 
-    mask = (F("vtkValidPointMask").view(np.uint8) > 0).astype(np.uint8)
+    valid = F("vtkValidPointMask")
+    if valid.dtype.kind == "S":  # VTK's char array comes through numpy as bytes; tack's is i32
+        valid = valid.view(np.uint8)
+    mask = (valid > 0).astype(np.uint8)
     m = mask.astype(bool)
     # exclude voxels that are adjacent to body/floor
     m_eroded = ndi.binary_erosion(m, iterations=args.wall_erosion_voxels)
@@ -435,7 +614,7 @@ def main():
         dims=dims,
         origin=[bx0, by0, bz0],
         box_body_units=dict(up_L=args.up, down_L=args.down, lat_W=args.lat, top_H=args.top),
-        ingredients_computed_on="VTU mesh, cell-centered vtkGradientFilter -> vtkCellToPointData -> vtkResampleToImage",
+        ingredients_computed_on=ingredients_computed_on,
         vtk_smp_backend=vtkSMPTools.GetBackend(),
         vtk_threads=vtkSMPTools.GetEstimatedNumberOfThreads(),
         thresholds=dict(
