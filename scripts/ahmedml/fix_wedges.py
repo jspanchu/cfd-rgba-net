@@ -15,7 +15,7 @@ OpenFOAM_<key> in the field data.
 A run with a valid volume_<N>.fixed.json is skipped. A failed run is logged to
 <staging>/failures.log and its staged original is kept.
 
-    python fix_vtu.py --runs data/geo_parameters_all.csv --data /data/cfd-rgba-net-data/ahmedML/data \
+    python scripts/ahmedml/fix_wedges.py --runs 1-499 --data /data/cfd-rgba-net-data/ahmedML/data \
         --staging /data/cfd-rgba-net-data/ahmedML/staging --workers 2
 """
 import argparse
@@ -32,8 +32,8 @@ import threading
 import time
 import traceback
 
+from huggingface_hub import HfApi, hf_hub_download
 import numpy as np
-import pandas as pd
 
 from vtkmodules.util.numpy_support import vtk_to_numpy
 from vtkmodules.vtkCommonCore import vtkCommand, vtkStringArray
@@ -43,7 +43,7 @@ from vtkmodules.vtkFiltersCore import vtkExtractCells
 from vtkmodules.vtkFiltersGeneral import vtkCellValidator
 from vtkmodules.vtkIOXML import vtkXMLUnstructuredGridReader, vtkXMLUnstructuredGridWriter
 
-from hf_download import download
+from cfd_rgba_net.batch import parse_runs
 
 REPO = "neashton/ahmedml"
 # The wedge permutation that mirrors a wedge: reverses all five faces.
@@ -597,12 +597,23 @@ def is_done(run, data):
 
 def expected_sha256(run):
     try:
-        from huggingface_hub import HfApi
         info = HfApi().get_paths_info(REPO, [f"run_{run}/volume_{run}.vtu"], repo_type="dataset", expand=True)
         return info[0].lfs.sha256 if info and info[0].lfs else None
     except Exception as e:
         print(f"[dl ] run_{run}: no sha256 from Hugging Face ({e})", flush=True)
         return None
+
+
+def download(run, staging):
+    """Fetch run_<run>/volume_<run>.vtu from REPO into staging, unless a non-empty copy is there."""
+    rel = f"run_{run}/volume_{run}.vtu"
+    target = Path(staging) / rel
+    if target.exists() and target.stat().st_size > 0:
+        return target
+    t0 = time.time()
+    hf_hub_download(repo_id=REPO, filename=rel, local_dir=staging, repo_type="dataset")
+    print(f"[dl ] {REPO}: {rel}  {target.stat().st_size / 1e9:.2f} GB in {time.time() - t0:.0f}s", flush=True)
+    return target
 
 
 def _convert_job(run, src, data, setting, sha):
@@ -614,7 +625,7 @@ def _convert_job(run, src, data, setting, sha):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--runs", required=True, help="comma-separated ids, or path to a csv with a 'run' column.")
+    ap.add_argument("--runs", required=True, help="'1,5,7', '1-499', '1-3,10', or a CSV file with a 'run' column")
     ap.add_argument("--data", required=True, help="dataset root holding run_<N>/ folders")
     ap.add_argument("--staging", required=True, help="where the original VTUs are downloaded to")
     ap.add_argument("--workers", type=int, default=2)
@@ -622,8 +633,7 @@ def main():
     ap.add_argument("--max-failures", type=int, default=5, help="stop downloading after this many failures")
     ap.add_argument("--min-free-gb", type=float, default=50, help="stop downloading below this much free space")
     args = ap.parse_args()
-    runs = (pd.read_csv(args.runs)["run"].astype(int).tolist() if args.runs.endswith(".csv")
-            else [int(x) for x in args.runs.split(",")])
+    runs = parse_runs(args.runs)
     todo = [r for r in runs if not is_done(r, args.data)]
     print(f"{len(runs)} runs requested, {len(todo)} to do", flush=True)
     staging = Path(args.staging)
@@ -645,7 +655,7 @@ def main():
                 break
             try:
                 sha = expected_sha256(r)
-                download(r, staging, files=["volume_{r}.vtu"], repo=REPO)
+                download(r, staging)
                 q.put((r, sha))
             except Exception as e:
                 print(f"[dl ] run_{r}: {e}", flush=True)

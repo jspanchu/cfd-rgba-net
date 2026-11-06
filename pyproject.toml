@@ -2,29 +2,47 @@
 name = "cfd-rgba-net"
 version = "0.1.0"
 description = "Learned color & opacity transfer functions for CFD flow features"
+license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
     "huggingface_hub>=2.1.1",
     "torch>=2.4.0",
     "numpy",
     "pandas",
+    "pyyaml",
     "scipy",
     "vtk==9.7.1",
-    "tack-core[cpu]",
-    "tack-core[cuda]; sys_platform == 'linux' or sys_platform == 'win32'",
-    "tack-core[metal]; sys_platform == 'darwin'",
-    "tack-vis",
+    "zarr>=3.4.2",
+    "hf-xet>=1.6.0",
 ]
+
+[project.scripts]
+cfd-rgba-net-build-case = "cfd_rgba_net.build_case:main"
+cfd-rgba-net-batch = "cfd_rgba_net.batch:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cfd_rgba_net"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"configs" = "cfd_rgba_net/configs"
 
 [tool.uv.sources]
 torch = { index = "pytorch-cuda", marker = "platform_system == 'Linux' or platform_system == 'Windows'" }
-tack-core = { git = "https://github.com/berkgeveci/tack", subdirectory = "packages/tack-core", branch = "main" }
-tack-vis = { git = "https://github.com/berkgeveci/tack", subdirectory = "packages/tack-vis", branch = "main" }
 
 [[tool.uv.index]]
 name = "pytorch-cuda"
 url = "https://download.pytorch.org/whl/cu132"
 explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.pyright]
 venvPath = "."

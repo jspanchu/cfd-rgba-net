@@ -1,0 +1,16 @@
+# Label rules v1: vortex and shear_layer. Thresholds are on non-dimensional quantities; lengths
+# are in units of H, converted to voxels with the contract's n_per_H. The same rules apply to
+# every dataset family: a dataset YAML cannot override them.
+label_rules_version: "1"
+
+# vortex        : lambda2* < -tau_lambda2 AND Q* > 0
+tau_lambda2: 0.5
+
+# shear_layer   : |omega|* > tau_omega AND NOT vortex
+tau_omega: 2.0
+
+# Both exclude voxels below floor_exclude_H * H above the ground (ground boundary layer) and
+# voxels within wall_erosion_H * H of any wall (resampled gradients there are dominated by the
+# wall boundary layer).
+floor_exclude_H: 0.12
+wall_erosion_H: 0.03125                   # 1 voxel at n_per_H = 32

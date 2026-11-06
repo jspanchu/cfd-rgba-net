@@ -1,0 +1,17 @@
+# Input contract v1.0: fixed by the model, not by the user.
+# Everything here is in units of the reference length H and the freestream speed U_inf.
+# There is no axis convention: the voxel grid is aligned with the mesh's own x, y, z axes, and the
+# flow may run along any of them, in either sign. The model is trained to be invariant to that.
+contract_version: "1.0"
+
+# Voxel size dx = H / n_per_H.
+n_per_H: 32
+
+# Model input channels, in this order. u, v, w and Cp are 0 outside the fluid.
+#   u, v, w : velocity / U_inf along the mesh's x, y, z axes
+#   Cp      : 2 (p - p_inf) / (rho U_inf^2)
+#   sdf     : signed distance to the body surface / H (negative inside the body)
+channels: [u, v, w, Cp, sdf]
+
+# There is no box: the grid fills the dataset's domain (`domain` in configs/datasets/<name>.yaml,
+# default the mesh bounds) at training, and the user's chosen region at inference. Only dx is fixed.

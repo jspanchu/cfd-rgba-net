@@ -1,0 +1,28 @@
+dataset: DrivAerML
+hf_repo: neashton/drivaerml
+
+# NOT YET VERIFIED on a downloaded case. On Hugging Face, volume_{run}.vtu is split into
+# volume_{run}.vtu.00.part and .01.part (concatenate them). ~147M cells, OpenFOAM v2212, so its
+# wedges probably need the same point-order fix as AhmedML (scripts/ahmedml/fix_wedges.py).
+files:
+  volume: run_{run}/volume_{run}.vtu
+  body: run_{run}/drivaer_{run}.stl
+  geo_parameters: run_{run}/geo_parameters_{run}.csv
+
+fields:
+  velocity: [UMean, U]
+  pressure: [pMean, p]
+
+flow:
+  U_inf: 38.889                    # TODO verify against the DrivAerML paper (140 km/h)
+  p_inf: 0.0
+  rho: 1.0                         # TODO verify kinematic pressure
+  nu: 1.507e-5                     # TODO verify
+  up_direction: [0, 0, 1]
+  ground: auto
+
+# domain: TODO a region around the car; the open-road domain at H/32 is likely too large.
+
+body:
+  scale: 1.0                       # TODO verify STL units (the STEP is in millimetres)
+  reference_length: height         # includes the wheels down to the ground

@@ -1,0 +1,41 @@
+dataset: WindsorML
+hf_repo: neashton/windsorml
+
+# Reference: Ashton et al. 2024, WindsorML, arXiv:2407.19320, pp. 3-4. Volcano ScaLES LES on a
+# Cartesian octree with immersed boundaries; cell data only, velocity as three scalar arrays.
+# y is up and the CAD origin is on the ground plane. The domain is the wind tunnel (1.92 m wide x
+# 1.32 m high, x from -5 to +6 m, yawed 2.5 deg with the body aligned to x) venting into a large
+# reservoir, so the volume's bounding box (~1 km) is far larger than the tunnel. The flow runs along
+# +x within 2.5 deg, which is how the grid sees it (no rotation).
+files:
+  volume: run_{run}/volume_{run}.vtu
+  body: run_{run}/windsor_{run}.stl
+  geo_parameters: run_{run}/geo_parameters_{run}.csv
+
+fields:
+  velocity:
+    - components: [velocityxavg, velocityyavg, velocityzavg]
+  pressure: [pressureavg]          # TODO verify the name and whether it is static gauge pressure in Pa
+
+flow:
+  # U_inf = |U| and p_inf = p at the tunnel's reference sensor (paper p. 4), read for each run.
+  # Run 1: |U| = 41.74 m/s (nominal inlet 40), p = 37,239.
+  reference_probe: [-2.0, 1.3, 0.0]
+  rho: 1.31                        # rho_ref, paper supplementary B.6.4. Run 1: stagnation Cp 1.000 near the nose; the
+                                   # dataset's surface cpavg (normalized by the nominal 40 m/s) agrees within 1%
+  nu: 1.44e-5                      # Re = 2.9e6 on body length 1.044 m at 40 m/s (paper pp. 3-4)
+  up_direction: [0, 1, 0]
+  ground: 0.0                      # the CAD origin is on the ground plane; 'auto' would find the reservoir floor
+
+# The axis-aligned bounding box of the tunnel (the mesh bounds include the ~1 km reservoir):
+# x -5..6 m, floor to ceiling y 0..1.32 m, and in z the 1.92 m width yawed 2.5 deg about the body
+# (centre line z = -tan(2.5 deg) x, which matches the walls measured on run 1 to 2 mm). The two
+# wedges between the yawed walls and this box have no mesh cells; they are left non-fluid.
+domain: [-5.0, 6.0, 0.0, 1.32, -1.223, 1.180]
+# Under the body the lowest mesh points are 3.66e-6 m above y = 0 (immersed boundary), so the first
+# voxel layer must sit higher than the default 1e-6 H.
+floor_offset_H: 1.0e-4
+
+body:
+  scale: 1.0                       # metres: body 1.044 x 0.389 x 0.289 m (paper Fig. 1)
+  reference_length: height         # includes the support pins (ground to roof)

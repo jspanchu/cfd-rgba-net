@@ -1,0 +1,29 @@
+dataset: AhmedML
+hf_repo: jspanchu/ahmedml          # neashton/ahmedml with the VTK_WEDGE point order fixed (scripts/ahmedml/fix_wedges.py)
+
+# Paths relative to the data root; {run} is the run number.
+files:
+  volume: run_{run}/volume_{run}.vtu
+  body: run_{run}/ahmed_{run}.stl
+  geo_parameters: run_{run}/geo_parameters_{run}.csv
+
+# First name found wins. A vector array is given by name; a velocity stored as three scalar
+# arrays is given as components: [ux, uy, uz].
+fields:
+  velocity: [UMean, U]
+  pressure: [pMean, p]
+
+flow:
+  U_inf: 1.0                       # non-dimensional OpenFOAM case
+  p_inf: 0.0
+  rho: 1.0                         # kinematic pressure
+  nu: 3.75e-7
+  up_direction: [0, 0, 1]
+  ground: auto                     # auto = lowest volume-mesh point along up_direction
+
+domain: mesh                       # the whole CFD domain (x -4..6, y -1..1, z 0..1.4)
+floor_offset_H: 1.0e-6             # first voxel layer above the ground (units of H)
+
+body:
+  scale: 1.0                       # STL units to volume-mesh units
+  reference_length: height         # H = body extent along up_direction, or a number

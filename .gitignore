@@ -4,3 +4,4 @@ __pycache
 *egg-info
 *pyc
 artifacts
+*.sha256
