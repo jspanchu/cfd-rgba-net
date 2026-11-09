@@ -4,11 +4,11 @@ Figures for progress.md section III (data trends and distributions), from the Ah
 
     slant      box plots of per-case class fraction vs. slant-angle bin   (store attributes only)
     sections   y=0 and crossflow slices of u/Uinf and labels for two runs (2-D slices of two stores)
-    hist       per-class histograms of the five inputs                    (voxel sample)
+    hist       per-class histograms of the input channels                 (voxel sample)
     corr       Spearman correlation of inputs, ingredients and labels     (voxel sample)
 
-The voxel sample is --per-run random fluid voxels (seeded by run number) from each store: inputs
-(u, v, w, Cp, sdf), ingredients (Q*, lambda2*, |omega|*) and labels (vortex, shear_layer). It is
+The voxel sample is --per-run random fluid voxels (body_proximity < 1; seeded by run number) from each
+store: inputs (u, v, w, Cp, body_proximity, ground_proximity), ingredients (Q*, lambda2*, |omega|*) and labels (vortex, shear_layer). It is
 drawn once per invocation and shared by hist and corr.
 
 Usage:
@@ -131,10 +131,11 @@ def fig_sections(out, fig_dir, runs):
         zs = (o[2] + np.arange(nz) * dx) / H
         iz = zs <= 2.0
         u_ch = a["channel_names"].index("u")
+        b_ch = a["channel_names"].index("body_proximity")
 
         def section(sel):
             """u/Uinf (masked in the body) and label index (n_idx in the body) on one plane."""
-            body = ~g["fluid"][sel]
+            body = g["inputs"][(b_ch,) + sel] > 1  # inside the body: body_proximity > 1
             u = np.ma.masked_where(body, g["inputs"][(u_ch,) + sel])
             lab = label_index(g["labels"][(slice(None),) + sel], classes)
             lab[body] = n_idx
@@ -177,13 +178,14 @@ def fig_sections(out, fig_dir, runs):
 
 
 def sample_run(run, path, n):
-    """n random fluid voxels of one store: (inputs (5, n), ingredients (3, n), labels (C, n) bool, channel and class names)."""
+    """n random fluid voxels of one store: (inputs (C_in, n), ingredients (3, n), labels (C, n) bool, channel and class names)."""
     g = open_store(path)
     a = dict(g.attrs)
-    fluid = np.flatnonzero(g["fluid"][...])
+    b = g["inputs"][a["channel_names"].index("body_proximity")]
+    fluid = np.flatnonzero(b < 1)  # outside the body
     rng = np.random.default_rng(run)
     k = np.sort(rng.choice(fluid, min(n, fluid.size), replace=False))
-    ijk = np.unravel_index(k, g["fluid"].shape)
+    ijk = np.unravel_index(k, b.shape)
 
     def take(arr):
         """arr[:, ijk] as (C, n) in one coordinate read, so each chunk is decompressed once."""
@@ -209,8 +211,10 @@ def load_sample(out, per_run, max_runs=None, workers=8):
     return dict(x=x, ing=ing, y=y, channels=parts[0][3], classes=parts[0][4], ncase=len(runs))
 
 
-NAMES = {"u": "u / U∞", "v": "v / U∞", "w": "w / U∞", "Cp": "C_p", "sdf": "sdf / H"}
-LIMS = {"u": (-0.6, 1.5), "v": (-0.6, 0.6), "w": (-0.6, 0.6), "Cp": (-1.2, 1.05), "sdf": (0.0, 4.0)}
+NAMES = {"u": "u / U∞", "v": "v / U∞", "w": "w / U∞", "Cp": "C_p", "sdf": "sdf / H",
+         "body_proximity": "body proximity", "ground_proximity": "ground proximity"}
+LIMS = {"u": (-0.6, 1.5), "v": (-0.6, 0.6), "w": (-0.6, 0.6), "Cp": (-1.2, 1.05), "sdf": (0.0, 4.0),
+        "body_proximity": (0.0, 1.0), "ground_proximity": (0.0, 1.0)}
 
 
 def fig_hist(s, fig_dir):

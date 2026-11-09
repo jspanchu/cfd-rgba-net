@@ -9,7 +9,7 @@ def test_contract_and_rules_load():
     r = LabelRules.load()
     assert c.contract_version == CONTRACT_VERSION
     assert r.label_rules_version == LABEL_RULES_VERSION
-    assert c.channels == ("u", "v", "w", "Cp", "sdf")
+    assert c.channels == ("u", "v", "w", "Cp", "body_proximity", "ground_proximity")
     # unit conversions reproduce the previous voxel-based settings at n_per_H = 32
     assert r.wall_erosion_voxels(32) == 1
 

@@ -8,11 +8,16 @@ sees inputs built the same way.
     geo   = case_geometry(body, prep.ground, case_cfg.reference_length, flow.up_axis)
     spec  = geo.image_spec(contract, case_cfg.domain or mesh.GetBounds())   # the whole domain
     image = resample(prep.mesh, spec)                 # point arrays on the voxel grid
-    inp   = assemble_inputs(image, body, geo, spec)   # (5, nx, ny, nz) + fluid mask
+    inp   = assemble_inputs(image, body, geo, spec)   # (6, nx, ny, nz), INPUT_CHANNELS
 
 Nothing is rotated: the voxel grid and the u, v, w channels use the mesh's own axes, whichever way
 the flow runs along them. The grid fills the dataset's domain; the up direction only sets H, the
-ground and the floor exclusion.
+ground, the ground proximity and the floor exclusion.
+
+Body and ground enter as two proximity channels, not as 0/1 masks and not as the raw signed distance:
+    body_proximity   b = max(0, 1 - sdf / (4 H))   1 on the body surface, 0 at 4 H and beyond; inside the body
+                                                   the line continues (sdf < 0), so b > 1 inside, b < 1 outside
+    ground_proximity g = max(0, 1 - h / H)          1 on the ground, 0 at 1 H above it and higher
 """
 
 from __future__ import annotations
@@ -36,6 +41,23 @@ U_CELL = "U_cell"  # cell data, velocity / U_inf (gradients only); may be absent
 
 # The SDF is exact within this distance (units of H) of the body's bounding box, a distance transform beyond.
 SDF_EXACT_BAND_H = 1.0
+
+# Input channels, in this order (configs/contract_v1.yaml `channels` must match).
+INPUT_CHANNELS = ("u", "v", "w", "Cp", "body_proximity", "ground_proximity")
+
+# Distance (units of H) at which each proximity channel reaches 0.
+BODY_PROXIMITY_RANGE_H = 4.0
+GROUND_PROXIMITY_RANGE_H = 1.0
+
+
+def body_proximity(sdf_H: np.ndarray) -> np.ndarray:
+    """max(0, 1 - sdf / (4 H)) from sdf / H: 1 on the surface, > 1 inside the body, 0 from 4 H out."""
+    return np.maximum(0.0, 1.0 - np.asarray(sdf_H, np.float32) / np.float32(BODY_PROXIMITY_RANGE_H))
+
+
+def ground_proximity(h_H: np.ndarray) -> np.ndarray:
+    """max(0, 1 - h / H) from the height above the ground / H: 1 on the ground, 0 from 1 H up."""
+    return np.maximum(0.0, 1.0 - np.asarray(h_H, np.float32) / np.float32(GROUND_PROXIMITY_RANGE_H))
 
 
 def read_volume(path: str | Path, arrays: set[str] | None = None) -> vtkUnstructuredGrid:
@@ -190,8 +212,8 @@ def resample(mesh: vtkUnstructuredGrid, spec: ImageSpec, names: list[str] | None
 
 @dataclass
 class Inputs:
-    inputs: np.ndarray       # (5, nx, ny, nz) float32: u, v, w, Cp, sdf/H
-    fluid: np.ndarray        # (nx, ny, nz) bool: inside the mesh and outside the body
+    inputs: np.ndarray       # (6, nx, ny, nz) float32, INPUT_CHANNELS
+    fluid: np.ndarray        # (nx, ny, nz) bool: inside the mesh and outside the body (labels only; not stored)
     checks: dict
 
 
@@ -216,5 +238,15 @@ def assemble_inputs(image: dict[str, np.ndarray], body: vtkPolyData, geo: CaseGe
         Cp_max_fluid=float(Cp[fluid].max()) if fluid.any() else None,  # ~1 at the stagnation point
         sdf=sdf_info,
     )
-    inputs = np.concatenate([U, Cp[None], (sdf / geo.H)[None]], axis=0).astype(np.float32)
+    sdf_H = (sdf / geo.H).astype(np.float32)
+    h_H = np.broadcast_to(geo.height_above_ground(spec) / geo.H, spec.dims)
+    b, g = body_proximity(sdf_H), ground_proximity(h_H)
+    checks["proximity"] = dict(
+        body_range_H=BODY_PROXIMITY_RANGE_H, ground_range_H=GROUND_PROXIMITY_RANGE_H,
+        body_max=float(b.max()),                              # 1 + max depth inside the body / (4 H)
+        n_body_gt1_not_body=int(((b > 1) & ~inside).sum()),   # 0: b > 1 exactly on the body voxels
+        ground_first_layer=float(g.max()),                    # 1 - floor_offset_H
+        n_ground_gt0=int((g > 0).sum()),
+    )
+    inputs = np.stack([U[0], U[1], U[2], Cp, b, g]).astype(np.float32)
     return Inputs(inputs, fluid, checks)

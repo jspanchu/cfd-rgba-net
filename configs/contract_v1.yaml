@@ -7,11 +7,14 @@ contract_version: "1.0"
 # Voxel size dx = H / n_per_H.
 n_per_H: 32
 
-# Model input channels, in this order. u, v, w and Cp are 0 outside the fluid.
-#   u, v, w : velocity / U_inf along the mesh's x, y, z axes
-#   Cp      : 2 (p - p_inf) / (rho U_inf^2)
-#   sdf     : signed distance to the body surface / H (negative inside the body)
-channels: [u, v, w, Cp, sdf]
+# Input channels, in this order. u, v, w and Cp are 0 outside the fluid.
+#   u, v, w          : velocity / U_inf along the mesh's x, y, z axes
+#   Cp               : 2 (p - p_inf) / (rho U_inf^2)
+#   body_proximity   : max(0, 1 - sdf / (4 H)), sdf the signed distance to the body surface (negative inside):
+#                      1 on the body surface, 0 at 4 H and beyond; it keeps rising inside the body (> 1), so
+#                      inside vs outside is b > 1 vs b < 1. Neither a 0/1 mask nor the raw sdf is an input.
+#   ground_proximity : max(0, 1 - h / H), h the height above the ground: 1 on the ground, 0 at 1 H and above
+channels: [u, v, w, Cp, body_proximity, ground_proximity]
 
 # There is no box: the grid fills the dataset's domain (`domain` in configs/datasets/<name>.yaml,
 # default the mesh bounds) at training, and the user's chosen region at inference. Only dx is fixed.

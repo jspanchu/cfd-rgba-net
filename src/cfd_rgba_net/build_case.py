@@ -4,8 +4,7 @@ Build one training case: model inputs, label ingredients and labels on the voxel
     cfd-rgba-net-build-case --dataset ahmedml --run 1 --data /data/.../ahmedML/data --out out
 
 Writes one Zarr v3 store, <out>/<tag>.zarr, with <tag> = <dataset>_run<N>:
-    inputs          (5, nx, ny, nz) float32: u, v, w, Cp, sdf/H
-    fluid           (nx, ny, nz) bool
+    inputs          (6, nx, ny, nz) float32: u, v, w, Cp, body_proximity, ground_proximity
     labels          (2, nx, ny, nz) uint8: vortex, shear_layer
     ingredients/    Q_nd, lambda2_nd, omega_mag_nd (float32), core (bool): teacher only
     attributes      grid, case config, contract, label rules, geometry, checks, provenance
@@ -62,8 +61,11 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
     from .geometry import case_geometry, read_body
     from .ingredients import INGREDIENTS, add_ingredients
     from .label import CLASS_NAMES, describe, make_labels
-    from .preprocess import CP, U_ND, assemble_inputs, prepare_mesh, read_volume, resample
+    from .preprocess import CP, INPUT_CHANNELS, U_ND, assemble_inputs, prepare_mesh, read_volume, resample
 
+    if tuple(contract.channels) != INPUT_CHANNELS:
+        raise ValueError(f"contract channels {list(contract.channels)} != the channels preprocess builds "
+                         f"{list(INPUT_CHANNELS)}")
     t0 = time.time()
 
     def step(msg):
@@ -123,7 +125,8 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
 
     if save_vti:
         io.save_vti(out / f"{tag}_inputs.vti", spec, {"U_nd": inp.inputs[:3], "Cp": inp.inputs[3],
-                                                     "sdf_H": inp.inputs[4], "fluid": inp.fluid.astype("uint8")})
+                                                     "body_proximity": inp.inputs[4],
+                                                     "ground_proximity": inp.inputs[5]})
         io.save_vti(out / f"{tag}_ingredients.vti", spec, {**ing, "core": lab.core.astype("uint8")})
         io.save_vti(out / f"{tag}_labels.vti", spec, {**{c: lab.labels[i] for i, c in enumerate(CLASS_NAMES)},
                                                      "n_labels": lab.labels.sum(0).astype("uint8")})
@@ -153,7 +156,7 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
         runtime_s=time.time() - t0,
     )
     io.save_case_zarr(out / f"{tag}.zarr", spec,
-                      arrays=dict(inputs=inp.inputs, fluid=inp.fluid, labels=lab.labels),
+                      arrays=dict(inputs=inp.inputs, labels=lab.labels),
                       groups=dict(ingredients={**{k: v.astype("float32") for k, v in ing.items()}, "core": lab.core}),
                       attrs=meta)
     step(f"wrote {tag}.zarr")

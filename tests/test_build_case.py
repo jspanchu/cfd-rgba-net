@@ -14,6 +14,7 @@ from cfd_rgba_net.build_case import build_case
 import zarr
 
 from cfd_rgba_net.config import CaseConfig, Contract, LabelRules
+from cfd_rgba_net.preprocess import INPUT_CHANNELS
 
 from helpers import add, box_mesh, cell_centers, points
 
@@ -78,7 +79,7 @@ def test_build_case_fails_without_body_voxels(tmp_path):
     cfg = CaseConfig.load(yaml)
     out = tmp_path / "out"
     with pytest.raises(ValueError, match="no voxel lies inside the body"):
-        build_case(cfg, 1, tmp_path, out, Contract("1.0", 16, ("u", "v", "w", "Cp", "sdf")), LabelRules.load(),
+        build_case(cfg, 1, tmp_path, out, Contract("1.0", 16, INPUT_CHANNELS), LabelRules.load(),
                    log=lambda m: None)
     assert not (out / "synthetic_run1.zarr").exists()
 
@@ -86,7 +87,7 @@ def test_build_case_fails_without_body_voxels(tmp_path):
 def test_build_case(tmp_path):
     make_case(tmp_path)
     cfg = CaseConfig.load(tmp_path / "synthetic.yaml")
-    contract = Contract("1.0", 16, ("u", "v", "w", "Cp", "sdf"))
+    contract = Contract("1.0", 16, INPUT_CHANNELS)
     out = tmp_path / "out"
     meta = build_case(cfg, 1, tmp_path, out, contract, LabelRules.load(), save_vti=True, log=lambda m: None)
 
@@ -94,20 +95,28 @@ def test_build_case(tmp_path):
     m = dict(store.attrs)
     assert not (out / "synthetic_run1.zarr.tmp").exists()
     x = store["inputs"][...]
-    assert x.shape[0] == 5 and m["channel_names"] == ["u", "v", "w", "Cp", "sdf"]
-    assert store["inputs"].chunks == (5, 64, 64, 64) and x.dtype == np.float32
-    fluid = store["fluid"][...]
+    assert x.shape[0] == 6 and m["channel_names"] == ["u", "v", "w", "Cp", "body_proximity", "ground_proximity"]
+    assert store["inputs"].chunks == (6, 64, 64, 64) and x.dtype == np.float32
+    # no 0/1 body or fluid mask: the body is where body_proximity > 1
+    assert set(store.array_keys()) == {"inputs", "labels"}
     # the grid fills the mesh domain (x -1..3, y -0.75..0.75, z 0..1.5), just inside its faces
     g = meta["grid"]
     assert -1.0 < g["origin"][0] < -1.0 + 1e-3 and 0.0 < g["origin"][2] < 1e-3
-    sdf = x[4]
+    b, gp = x[4], x[5]
+    assert b.max() > 1 and b.min() == 0
     # body voxels are inside the mesh here, but the STL mask removes them from the fluid
     assert meta["checks"]["voxels"]["n_in_mesh_and_body"] > 0
-    assert not fluid[sdf < 0].any()
+    fluid = b < 1
     assert (x[:4, ~fluid] == 0).all()
-    np.testing.assert_allclose(x[0][fluid & (sdf > 1.0)], 1.0, atol=1e-5)  # u/U_inf far from the body
-    # H = sphere diameter; sdf/H at the sphere center = -radius/H = -0.5
-    assert sdf.min() == np.float32(sdf.min()) and -0.55 < sdf.min() < -0.45
+    # ground at z = 0, H = 0.4: g = 1 - z/H on the first layers, 0 from z = H up
+    H, dz = meta["geometry"]["H"], float(g["dx"])
+    z = g["origin"][2] + dz * np.arange(gp.shape[2])
+    np.testing.assert_allclose(gp[0, 0], np.maximum(0, 1 - z / H), atol=1e-6)
+    assert (gp == gp[:1, :1, :]).all()                     # a function of the height only
+    assert meta["checks"]["voxels"]["proximity"]["n_body_gt1_not_body"] == 0
+    np.testing.assert_allclose(x[0][b < 0.75], 1.0, atol=1e-5)  # u/U_inf more than 1 H from the body
+    # H = sphere diameter; sdf/H at the sphere center = -radius/H = -0.5, so b = 1 + 0.5 / 4 there
+    assert 1.11 < b.max() < 1.14
 
     L = store["labels"][...]
     names = m["class_names"]
