@@ -12,6 +12,12 @@ files:
 fields:
   velocity: [UMean, U]
   pressure: [pMean, p]
+field_source: cell                 # TODO verify against a downloaded case (OpenFOAM stores cell-centred values); no fallback to points
+
+# Arrays the dataset carries that the label ingredients are checked against (sanity checks only; optional).
+check_fields:                      # TODO verify the names on a downloaded case
+  vorticity: vorticityMean         # cell array, dimensional vorticity vector
+  cp: static(p)_coeffMean          # point array, pressure coefficient
 
 flow:
   U_inf: 38.889                    # TODO verify against the DrivAerML paper (140 km/h)
@@ -22,7 +28,10 @@ flow:
   ground: auto
 
 # domain: TODO a region around the car; the open-road domain at H/32 is likely too large.
+floor_offset_H: 1.0e-6             # TODO verify; first voxel layer above the ground (units of H)
+grid_inset_H: 1.0e-6               # TODO verify; voxels stay this far inside the domain's side faces (units of H)
 
 body:
   scale: 1.0                       # TODO verify STL units (the STEP is in millimetres)
+  merge_tolerance: 1.0e-5          # TODO verify; merge STL vertices closer than this fraction of the bounding-box diagonal
   reference_length: height         # includes the wheels down to the ground

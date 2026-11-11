@@ -10,9 +10,9 @@ source .venv/bin/activate
 ## Layout
 
 ```
-configs/contract_v1.yaml        input contract v1.0: n_per_H, channels (units of H)
+configs/contract_v1.yaml        input contract v1.0: n_per_H, channels, proximity ranges, SDF band (units of H)
 configs/label_rules_v1.yaml     label rules v1 thresholds (units of H)
-configs/datasets/*.yaml         per-dataset case parameters: files, field names, U_inf, frame, ground
+configs/datasets/*.yaml         per-dataset case parameters: files, field names and source (point or cell), U_inf, frame, ground
 src/cfd_rgba_net/
     config.py                   loads the three kinds of YAML
     geometry.py                 body STL, voxel grid on the mesh axes, signed distance

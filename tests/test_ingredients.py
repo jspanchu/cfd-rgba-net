@@ -5,13 +5,12 @@ mesh gradient is exact on any cell type, and their invariance to H and U_inf sca
 
 import numpy as np
 import pytest
-from vtkmodules.util.numpy_support import vtk_to_numpy
+from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 
-from cfd_rgba_net.config import VectorField
 from cfd_rgba_net.ingredients import add_ingredients, lambda2, q_and_vorticity
 from cfd_rgba_net.preprocess import prepare_mesh
 
-from helpers import box_mesh, set_linear_velocity
+from helpers import box_mesh, interior, set_linear_velocity
 
 
 def arr(ug, name):
@@ -49,25 +48,23 @@ def test_linear_fields_exact(flow_cfg, tets, both, field, Q, omega, lam2):
     ug = box_mesh(tets=tets)
     set_linear_velocity(ug, field, both=both)
     prep = prepare_mesh(ug, flow_cfg())
-    add_ingredients(prep.mesh, 1.0)
+    checks = add_ingredients(prep.mesh, 1.0)
+    assert checks["gradient_of"] == ("cell U" if both else "point U")      # U_cell is present iff the mesh has cell U
     sel = interior(ug, 2) if both else slice(None)
     np.testing.assert_allclose(arr(prep.mesh, "Q_nd")[sel], Q, atol=1e-5)
     np.testing.assert_allclose(arr(prep.mesh, "omega_mag_nd")[sel], omega, atol=1e-5)
     np.testing.assert_allclose(arr(prep.mesh, "lambda2_nd")[sel], lam2, atol=1e-5)
 
 
-def interior(ug, layers, lo=(-1.0, -1.0, 0.0), hi=(1.0, 1.0, 2.0), h=0.25):
-    """Points at least `layers` cells (of size h) from every face of box_mesh's default box."""
-    P = vtk_to_numpy(ug.GetPoints().GetData())
-    d = layers * h - 1e-9
-    return np.all((P >= np.array(lo) + d) & (P <= np.array(hi) - d), axis=1)
+def test_lambda2_is_independent_of_the_chunk_size():
+    G = np.array([ROTATION, SHEAR, np.zeros((3, 3))], dtype=np.float32)
+    np.testing.assert_array_equal(lambda2(G, n_chunk=1), lambda2(G))
 
 
 def test_scaling_invariance(flow_cfg):
     """Scaling lengths by s (with H) and velocity by U_inf leaves every non-dimensional quantity unchanged."""
     def run(s, U_inf):
         ug = box_mesh()
-        from vtkmodules.util.numpy_support import numpy_to_vtk
         P = vtk_to_numpy(ug.GetPoints().GetData()) * s
         ug.GetPoints().SetData(numpy_to_vtk(P, deep=True))
         # same non-dimensional field: u/U_inf = (1 + 0.2 y/H, 0.1 z/H, 0), Cp = 0.3 x/H
@@ -80,29 +77,3 @@ def test_scaling_invariance(flow_cfg):
     a, b = run(1.0, 1.0), run(10.0, 40.0)
     for n in a:
         np.testing.assert_allclose(a[n], b[n], rtol=1e-4, atol=1e-5, err_msg=n)
-
-
-def test_velocity_components_and_cell_only(flow_cfg):
-    """Velocity as three scalar cell arrays (WindsorML layout) gives the same point U as a point vector."""
-    ug = box_mesh()
-    set_linear_velocity(ug, ROTATION, U0=(1, 0, 0))
-    U_point = arr(ug, "UMean").copy()
-    from vtkmodules.vtkCommonDataModel import vtkUnstructuredGrid
-    from helpers import add, cell_centers
-    cells = vtkUnstructuredGrid()
-    cells.ShallowCopy(ug)
-    cells.GetPointData().Initialize()
-    cells.GetCellData().Initialize()
-    C = cell_centers(ug)
-    Uc = np.array([1, 0, 0]) + C @ np.array(ROTATION, dtype=float).T
-    for i, c in enumerate("xyz"):
-        add(cells, f"velocity{c}avg", Uc[:, i], "cell")
-    add(cells, "pressureavg", np.zeros(len(C)), "cell")
-    cfg = flow_cfg(velocity=(VectorField(components=("velocityxavg", "velocityyavg", "velocityzavg")),))
-    cfg = cfg.__class__(**{**cfg.__dict__, "pressure": ("pressureavg",)})
-    prep = prepare_mesh(cells, cfg)
-    # cell-to-point averaging of a linear field is exact in the interior, not on the boundary
-    inner = interior(ug, 1)
-    np.testing.assert_allclose(arr(prep.mesh, "U_nd")[inner], U_point[inner], atol=1e-5)
-    add_ingredients(prep.mesh, 1.0)
-    np.testing.assert_allclose(arr(prep.mesh, "Q_nd")[interior(ug, 2)], W**2, atol=1e-5)

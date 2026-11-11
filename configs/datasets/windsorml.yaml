@@ -16,6 +16,7 @@ fields:
   velocity:
     - components: [velocityxavg, velocityyavg, velocityzavg]
   pressure: [pressureavg]          # TODO verify the name and whether it is static gauge pressure in Pa
+field_source: cell                 # TODO verify: cell data only (paper pp. 3-4); no fallback to points
 
 flow:
   # U_inf = |U| and p_inf = p at the tunnel's reference sensor (paper p. 4), read for each run.
@@ -35,7 +36,11 @@ domain: [-5.0, 6.0, 0.0, 1.32, -1.223, 1.180]
 # Under the body the lowest mesh points are 3.66e-6 m above y = 0 (immersed boundary), so the first
 # voxel layer must sit higher than the default 1e-6 H.
 floor_offset_H: 1.0e-4
+grid_inset_H: 1.0e-6               # voxels stay this far inside the domain's side faces (units of H)
 
 body:
   scale: 1.0                       # metres: body 1.044 x 0.389 x 0.289 m (paper Fig. 1)
+  # The STL repeats each vertex with ~1e-6 m differences, which leaves the surface open; merge them
+  # (fraction of the body's bounding-box diagonal).
+  merge_tolerance: 1.0e-5
   reference_length: height         # includes the support pins (ground to roof)

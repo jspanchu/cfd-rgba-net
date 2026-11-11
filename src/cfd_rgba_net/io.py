@@ -20,6 +20,23 @@ from .geometry import ImageSpec
 
 
 def git_state(repo: Path | None = None) -> dict:
+    """Record the git commit of the code that built a case.
+
+    The default repository is two levels above this package, which is the repository root in a source
+    checkout. For an installed wheel that location is outside the project, so the result is ``None`` or,
+    if the environment sits inside some other repository, that repository's commit.
+
+    Parameters
+    ----------
+    repo : pathlib.Path or None, optional
+        The repository. Defaults to the repository root of a source checkout.
+
+    Returns
+    -------
+    dict
+        ``commit`` (the HEAD hash) and ``dirty`` (true if tracked files have uncommitted changes;
+        untracked files are ignored). Both are ``None`` if git is missing or ``repo`` is not a repository.
+    """
     repo = repo or Path(__file__).resolve().parents[2]
     try:
         commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True,
@@ -32,9 +49,24 @@ def git_state(repo: Path | None = None) -> dict:
 
 
 def sha256(path: str | Path, chunk: int = 1 << 24) -> str:
-    """
-    SHA-256 of a file. Cached in <file>.sha256 (with its size and mtime), since the volume files are
-    tens of GB and do not change between builds.
+    """Compute the SHA-256 of a file, caching it next to the file.
+
+    The volume files are tens of GB and do not change between builds, so the digest is cached in
+    ``<file>.sha256`` together with the file's size and modification time, and reused while both match.
+    A file that changes without changing size or mtime would return a stale digest. Writing the cache
+    can fail (for example in a read-only directory); that is ignored and the digest is still returned.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The file to hash.
+    chunk : int, optional
+        Number of bytes read at a time.
+
+    Returns
+    -------
+    str
+        The hex digest.
     """
     path = Path(path)
     st = path.stat()
@@ -61,12 +93,26 @@ def sha256(path: str | Path, chunk: int = 1 << 24) -> str:
 
 
 def provenance(inputs: dict[str, Path]) -> dict:
+    """Collect what identifies the code and the inputs that built a case.
+
+    Parameters
+    ----------
+    inputs : dict[str, pathlib.Path]
+        Input files by role. An entry that is ``None``, missing, or not a regular file is skipped without
+        an error.
+
+    Returns
+    -------
+    dict
+        ``package_version``, ``contract_version``, ``label_rules_version``, ``git`` (see ``git_state``),
+        and ``inputs``: the path and SHA-256 of each input that was recorded.
+    """
     return dict(
         package_version=__version__,
         contract_version=CONTRACT_VERSION,
         label_rules_version=LABEL_RULES_VERSION,
         git=git_state(),
-        inputs={k: dict(path=str(p), sha256=sha256(p)) for k, p in inputs.items() if p is not None and Path(p).exists()},
+        inputs={k: dict(path=str(p), sha256=sha256(p)) for k, p in inputs.items() if p is not None and Path(p).is_file()},
     )
 
 
@@ -76,7 +122,19 @@ COMPRESSOR = BloscCodec(cname="zstd", clevel=5, shuffle="shuffle")
 
 
 def _put(group, name: str, a: np.ndarray):
-    """(..., nx, ny, nz) array; leading axes (channels) are kept whole in every chunk."""
+    """Store an array in a Zarr group, chunked and sharded along the three spatial axes.
+
+    Leading axes (channels) are kept whole in every chunk.
+
+    Parameters
+    ----------
+    group : zarr.Group
+        The group to create the array in.
+    name : str
+        The array's name.
+    a : numpy.ndarray
+        The values, shaped ``(..., nx, ny, nz)``.
+    """
     lead = a.shape[:-3]
     arr = group.create_array(name, shape=a.shape, dtype=a.dtype, chunks=lead + (CHUNK,) * 3,
                              shards=lead + (SHARD,) * 3, compressors=COMPRESSOR)
@@ -84,16 +142,45 @@ def _put(group, name: str, a: np.ndarray):
 
 
 def jsonable(obj):
+    """Convert an object to plain JSON types.
+
+    NumPy scalars become floats, so a NumPy boolean becomes ``1.0`` or ``0.0``, not ``true`` or ``false``.
+    NumPy arrays are not supported and raise ``TypeError``. ``NaN`` and infinities pass through as the
+    non-standard ``NaN`` and ``Infinity`` tokens.
+
+    Parameters
+    ----------
+    obj : object
+        Dicts, lists, tuples, strings, numbers, ``None`` and NumPy scalars, nested to any depth.
+
+    Returns
+    -------
+    object
+        The same structure in plain Python types, with tuples as lists.
+    """
     return json.loads(json.dumps(obj, default=float))
 
 
 def save_case_zarr(path: Path, spec: ImageSpec, arrays: dict[str, np.ndarray],
                    groups: dict[str, dict[str, np.ndarray]], attrs: dict):
-    """
-    One Zarr v3 store per case: `arrays` at the root, `groups` as sub-groups of arrays, `attrs` (plus the
-    grid) as the root attributes. Written to <path>.tmp and renamed at the end, so a store that exists is
-    complete. An existing store is renamed aside to <path>.old first and deleted only once the new one is
-    in place.
+    """Write one case as a Zarr v3 store.
+
+    The store goes to ``<path>.tmp`` and is renamed to ``path`` at the end, so a store that exists is
+    complete. An existing store is renamed aside to ``<path>.old`` first and deleted only once the new
+    one is in place. A crash between the two renames leaves ``.old`` and ``.tmp`` and no store at ``path``.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The store's location. Its parent directory must exist.
+    spec : ImageSpec
+        The voxel grid. Saved in the root attributes as ``grid``.
+    arrays : dict[str, numpy.ndarray]
+        Arrays stored at the root, shaped ``(..., nx, ny, nz)``.
+    groups : dict[str, dict[str, numpy.ndarray]]
+        Sub-groups by name, each holding arrays shaped ``(..., nx, ny, nz)``.
+    attrs : dict
+        Root attributes, converted with ``jsonable``. Must not have a ``grid`` key.
     """
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
@@ -115,6 +202,18 @@ def save_case_zarr(path: Path, spec: ImageSpec, arrays: dict[str, np.ndarray],
 
 
 def save_vti(path: Path, spec: ImageSpec, arrays: dict[str, np.ndarray]):
+    """Write arrays on the voxel grid as a VTK image file, for viewing.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The ``.vti`` file. Its parent directory must exist.
+    spec : ImageSpec
+        The voxel grid.
+    arrays : dict[str, numpy.ndarray]
+        Point arrays by name, shaped ``(nx, ny, nz)`` for a scalar or ``(C, nx, ny, nz)`` for a vector
+        with ``C`` components. Voxel ``[i, j, k]`` is at ``(x, y, z)``.
+    """
     image = spec.to_vtk()
     for name, a in arrays.items():
         flat = (a.reshape(-1, order="F") if a.ndim == 3
@@ -124,4 +223,3 @@ def save_vti(path: Path, spec: ImageSpec, arrays: dict[str, np.ndarray]):
         image.GetPointData().AddArray(v)
     writer = vtkXMLImageDataWriter(file_name=str(path), input_data=image)
     writer.Write()
-

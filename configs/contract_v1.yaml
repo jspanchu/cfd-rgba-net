@@ -16,5 +16,14 @@ n_per_H: 32
 #   ground_proximity : max(0, 1 - h / H), h the height above the ground: 1 on the ground, 0 at 1 H and above
 channels: [u, v, w, Cp, body_proximity, ground_proximity]
 
+# Distance, in units of H, at which each proximity channel reaches 0 (the 4 H and 1 H above).
+body_proximity_range_H: 4.0
+ground_proximity_range_H: 1.0
+
+# The signed distance to the body is exact within this distance (units of H) of the body's bounding box
+# and a Euclidean distance transform beyond it, whose error is a fraction of a voxel: small against
+# distances greater than the band.
+sdf_exact_band_H: 1.0
+
 # There is no box: the grid fills the dataset's domain (`domain` in configs/datasets/<name>.yaml,
 # default the mesh bounds) at training, and the user's chosen region at inference. Only dx is fixed.

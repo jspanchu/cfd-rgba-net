@@ -12,6 +12,12 @@ files:
 fields:
   velocity: [UMean, U]
   pressure: [pMean, p]
+field_source: point                # velocity and pressure are read from the mesh's point data; no fallback to cells
+
+# Arrays the dataset carries that the label ingredients are checked against (sanity checks only; optional).
+check_fields:
+  vorticity: vorticityMean         # cell array, dimensional vorticity vector
+  cp: static(p)_coeffMean          # point array, pressure coefficient
 
 flow:
   U_inf: 1.0                       # non-dimensional OpenFOAM case
@@ -23,7 +29,9 @@ flow:
 
 domain: mesh                       # the whole CFD domain (x -4..6, y -1..1, z 0..1.4)
 floor_offset_H: 1.0e-6             # first voxel layer above the ground (units of H)
+grid_inset_H: 1.0e-6               # voxels stay this far inside the domain's side faces (units of H)
 
 body:
   scale: 1.0                       # STL units to volume-mesh units
+  merge_tolerance: 1.0e-5          # merge STL vertices closer than this fraction of the body's bounding-box diagonal
   reference_length: height         # H = body extent along up_direction, or a number

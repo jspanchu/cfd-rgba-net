@@ -18,7 +18,21 @@ INGREDIENTS = ("Q_nd", "lambda2_nd", "omega_mag_nd")
 
 
 def lambda2(G: np.ndarray, n_chunk: int = 2_000_000) -> np.ndarray:
-    """Middle eigenvalue of S^2 + W^2 for each (3, 3) velocity gradient in G. Shape (N,), float32."""
+    """Compute the lambda2 vortex criterion for each velocity gradient.
+
+    Parameters
+    ----------
+    G : numpy.ndarray
+        Velocity gradients, shape ``(N, 3, 3)``, with ``G[n, i, j] = du_i / dx_j``.
+    n_chunk : int, optional
+        Number of gradients processed at a time, which bounds the memory of the eigenvalue solve.
+
+    Returns
+    -------
+    numpy.ndarray
+        Float32 array of shape ``(N,)``: the middle eigenvalue of ``S^2 + W^2``, where ``S`` and ``W``
+        are the symmetric and antisymmetric parts of ``G``.
+    """
     out = np.empty(G.shape[0], dtype=np.float32)
     for i in range(0, G.shape[0], n_chunk):
         # float64: M subtracts terms of similar size and lambda2 is often close to 0
@@ -30,7 +44,24 @@ def lambda2(G: np.ndarray, n_chunk: int = 2_000_000) -> np.ndarray:
 
 
 def q_and_vorticity(G: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Q = 0.5 (|W|^2 - |S|^2) and |omega| = |curl u| for each (3, 3) velocity gradient."""
+    """Compute the Q criterion and the vorticity magnitude for each velocity gradient.
+
+    The arithmetic runs in the dtype of ``G``, which is float32 in the pipeline. Unlike ``lambda2``, it
+    is not promoted to float64, although ``Q`` also subtracts terms of similar size. So ``Q`` carries
+    float32 round-off where ``|W|^2`` and ``|S|^2`` nearly cancel, as in pure shear.
+
+    Parameters
+    ----------
+    G : numpy.ndarray
+        Velocity gradients, shape ``(N, 3, 3)``, with ``G[n, i, j] = du_i / dx_j``.
+
+    Returns
+    -------
+    Q : numpy.ndarray
+        Float32 array of shape ``(N,)``: ``0.5 (|W|^2 - |S|^2)``, with Frobenius norms.
+    omega : numpy.ndarray
+        Float32 array of shape ``(N,)``: the magnitude of ``curl u``.
+    """
     gt = np.transpose(G, (0, 2, 1))
     S, W = 0.5 * (G + gt), 0.5 * (G - gt)
     Q = 0.5 * (np.sum(W**2, axis=(1, 2)) - np.sum(S**2, axis=(1, 2)))
@@ -38,12 +69,43 @@ def q_and_vorticity(G: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return Q.astype(np.float32), np.linalg.norm(w, axis=1).astype(np.float32)
 
 
-def add_ingredients(mesh: vtkUnstructuredGrid, H: float, dataset_vorticity: str | None = None, dataset_cp: str | None = None) -> dict:
-    """
-    Adds the INGREDIENTS as point data to mesh (prepared by preprocess.prepare_mesh), in place.
-    The gradient is taken of the cell velocity when present (cell-centered, as OpenFOAM stores it),
-    else of the point velocity. Optional dataset arrays are used only for sanity checks.
-    Returns the checks.
+def add_ingredients(
+    mesh: vtkUnstructuredGrid,
+    H: float,
+    dataset_vorticity: str | None = None,
+    dataset_cp: str | None = None,
+) -> dict:
+    """Add the label ingredients to a prepared mesh.
+
+    The gradient is taken of the cell velocity (``U_cell``, cell-centered, as OpenFOAM stores it) when the
+    mesh has it, else of the point velocity (``U_nd``). It is scaled by ``H`` to make it dimensionless.
+    Gradients that are not finite (degenerate cells) are set to zero and counted in the checks, so they
+    read as "no feature". Cell values are averaged to the points.
+
+    Parameters
+    ----------
+    mesh : vtkUnstructuredGrid
+        The mesh from ``preprocess.prepare_mesh``. Modified in place: ``INGREDIENTS`` are added to its
+        point data.
+    H : float
+        Reference length, in mesh units.
+    dataset_vorticity : str or None, optional
+        Name of the dataset's own vorticity array in the cell data. When given, and the gradient was
+        taken of the cell velocity, the checks compare it with ``|omega|*``.
+    dataset_cp : str or None, optional
+        Name of the dataset's own pressure-coefficient array in the point data. When given and present,
+        the checks report its largest difference from ``Cp``. A cell-only mesh never has it there.
+
+    Returns
+    -------
+    dict
+        The checks:
+
+        - ``gradient_of``: ``"cell U"`` or ``"point U"``;
+        - ``n_nonfinite_gradient``: number of gradients set to zero;
+        - ``omega_vs_dataset``: ``array``, ``spearman_r`` and ``note``, from a random 2M-cell subsample
+          above the median. Only when ``dataset_vorticity`` applies;
+        - ``Cp_vs_dataset_maxabs``: only when ``dataset_cp`` applies.
     """
     use_cell = mesh.GetCellData().HasArray(U_CELL)
     grad = vtkGradientFilter(input_data=mesh, result_array_name="gradU", compute_divergence=False,

@@ -1,6 +1,7 @@
 """Verification: hand-built voxel fixtures for each label rule (exact expected masks)."""
 
 import numpy as np
+import pytest
 
 from cfd_rgba_net.config import Axis, LabelRules
 from cfd_rgba_net.geometry import CaseGeometry, ImageSpec
@@ -67,12 +68,14 @@ def test_shear_excludes_vortex():
 
 
 def test_floor_exclusion():
+    """Nothing below floor_exclude_H * H is labeled, and everything above it is, away from the grid's faces."""
     ing = quiet()
     ing["omega_mag_nd"][:] = RULES.tau_omega + 1
     s = labels(ing).labels[IDX["shear_layer"]]
     z = SPEC.axis(2)
     below = z < RULES.floor_exclude_H * H
     assert s[:, :, below].sum() == 0
+    # stay clear of the grid's faces, where the wall erosion removes the outer layers (the top one, in z)
     assert s[5:-5, 5:-5, ~below][:, :, :-2].all()
 
 
@@ -86,3 +89,28 @@ def test_wall_erosion():
     s = r.labels[IDX["shear_layer"]]
     assert s[14, 10, 15] == 0 and s[12, 10, 15] == 1   # adjacent to the block vs 3 voxels away
     assert (r.labels[:, ~fluid] == 0).all()
+
+
+def test_labels_skip_the_grids_outer_layer():
+    """The erosion treats the outside of the grid as non-fluid, so the grid's faces act as walls."""
+    ing = quiet()
+    ing["omega_mag_nd"][:] = RULES.tau_omega + 1
+    s = labels(ing).labels[IDX["shear_layer"]]
+    for face in (s[0, :, Z_OK], s[-1, :, Z_OK], s[:, 0, Z_OK], s[:, -1, Z_OK]):
+        assert not face.any()
+    assert s[1, 10, Z_OK] == 1 and s[-2, 10, Z_OK] == 1
+
+
+def test_class_fractions_are_over_all_fluid_voxels():
+    """Fluid voxels excluded from labeling (floor, wall layer) count as fluid with no label."""
+    ing = quiet()
+    vortex_voxels = [(20, 10, Z_OK), (22, 10, Z_OK)]
+    shear_voxels = [(24, 10, Z_OK), (26, 10, Z_OK), (28, 10, Z_OK)]
+    for p in vortex_voxels:
+        ing["lambda2_nd"][p] = -RULES.tau_lambda2 - 0.1
+        ing["Q_nd"][p] = 0.1
+    for p in shear_voxels:
+        ing["omega_mag_nd"][p] = RULES.tau_omega + 1
+    n = int(np.prod(DIMS))
+    assert labels(ing).fractions == pytest.approx(
+        {"vortex": 2 / n, "shear_layer": 3 / n, "none": (n - 5) / n})

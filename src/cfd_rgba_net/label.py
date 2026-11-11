@@ -21,17 +21,59 @@ CLASS_NAMES = ("vortex", "shear_layer")
 
 @dataclass
 class LabelResult:
-    labels: np.ndarray        # (2, nx, ny, nz) uint8, CLASS_NAMES order
-    core: np.ndarray          # (nx, ny, nz) bool, where labels may be set
-    fluid_eroded: np.ndarray  # (nx, ny, nz) bool
-    fractions: dict           # per class, over fluid voxels
+    """The labels of one case, with the mask they were restricted to.
+
+    Attributes
+    ----------
+    labels : numpy.ndarray
+        Shape ``(2, nx, ny, nz)``, dtype uint8, 1 where a class applies. Channels follow ``CLASS_NAMES``.
+    core : numpy.ndarray
+        Boolean ``(nx, ny, nz)``: where labels may be set.
+    fluid_eroded : numpy.ndarray
+        Boolean ``(nx, ny, nz)``: the fluid mask after the wall erosion.
+    fractions : dict[str, float]
+        Fraction of the fluid voxels in each class, and under ``"none"`` those with no label.
+    """
+    labels: np.ndarray
+    core: np.ndarray
+    fluid_eroded: np.ndarray
+    fractions: dict
 
 
 def make_labels(ing: dict[str, np.ndarray], fluid: np.ndarray, spec: ImageSpec, geo: CaseGeometry,
                 rules: LabelRules, n_per_H: int) -> LabelResult:
-    """
-    ing: resampled ingredients {Q_nd, lambda2_nd, omega_mag_nd} on spec's grid.
-    fluid: voxels inside the mesh and outside the body.
+    """Apply the label rules to the ingredients on the voxel grid.
+
+    The rules are in the module docstring. Their text in ``describe`` repeats them: keep the two in step,
+    and bump ``LABEL_RULES_VERSION`` when a rule changes.
+
+    The wall erosion removes the fluid voxels within ``rules.wall_erosion_voxels(n_per_H)`` voxels of a
+    non-fluid one, with face-connected (6-neighbour) steps, so diagonal neighbours do not erode. It also
+    treats everything outside the grid as non-fluid: no label is ever set on the grid's outermost layers.
+    That is intended where the grid fills the mesh's domain, whose faces are mesh boundaries.
+
+    Parameters
+    ----------
+    ing : dict[str, numpy.ndarray]
+        The resampled ingredients ``Q_nd``, ``lambda2_nd`` and ``omega_mag_nd``, each of shape
+        ``spec.dims``. Non-finite values never satisfy a rule.
+    fluid : numpy.ndarray
+        Boolean array of shape ``spec.dims``: voxels inside the mesh and outside the body.
+    spec : ImageSpec
+        The voxel grid.
+    geo : CaseGeometry
+        Body and ground geometry. Supplies H and the height above the ground.
+    rules : LabelRules
+        The label thresholds.
+    n_per_H : int
+        Voxels per reference length H, from the contract.
+
+    Returns
+    -------
+    LabelResult
+        The labels, the mask they are restricted to, and the class fractions. The fractions count over
+        all fluid voxels, not only the core: fluid voxels removed by the erosion or the floor rule are
+        in ``"none"``.
     """
     erosion = rules.wall_erosion_voxels(n_per_H)
     fluid_eroded = ndi.binary_erosion(fluid, iterations=erosion) if erosion > 0 else fluid.copy()
@@ -49,7 +91,22 @@ def make_labels(ing: dict[str, np.ndarray], fluid: np.ndarray, spec: ImageSpec, 
 
 
 def describe(rules: LabelRules, n_per_H: int) -> dict[str, str]:
-    """The rules as text, with this configuration's numbers, for the metadata file."""
+    """Write the rules as text, with this configuration's numbers, for the metadata file.
+
+    The text repeats the rules in ``make_labels``: keep the two in step.
+
+    Parameters
+    ----------
+    rules : LabelRules
+        The label thresholds.
+    n_per_H : int
+        Voxels per reference length H, from the contract. Converts the wall erosion to voxels.
+
+    Returns
+    -------
+    dict[str, str]
+        The rule of each class under its name in ``CLASS_NAMES``, and the definition of ``core``.
+    """
     r = rules
     core = f"fluid eroded by {r.wall_erosion_voxels(n_per_H)} voxel(s) & height above ground >= {r.floor_exclude_H} H"
     return dict(
