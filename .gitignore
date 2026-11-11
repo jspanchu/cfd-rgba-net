@@ -1,4 +1,5 @@
 .DS_Store
+figures/
 **/__pycache__
 __pycache
 *egg-info
