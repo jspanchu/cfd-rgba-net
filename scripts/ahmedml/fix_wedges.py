@@ -15,7 +15,7 @@ OpenFOAM_<key> in the field data.
 A run with a valid volume_<N>.fixed.json is skipped. A failed run is logged to
 <staging>/failures.log and its staged original is kept.
 
-    python scripts/ahmedml/fix_wedges.py --runs 1-500 --data /data/cfd-rgba-net-data/ahmedML/data \
+    python scripts/ahmedml/fix_wedges.py --runs 1-499 --data /data/cfd-rgba-net-data/ahmedML/data \
         --staging /data/cfd-rgba-net-data/ahmedML/staging --workers 2
 """
 import argparse
@@ -625,7 +625,7 @@ def _convert_job(run, src, data, setting, sha):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--runs", required=True, help="'1,5,7', '1-500', '1-3,10', or a CSV file with a 'run' column")
+    ap.add_argument("--runs", required=True, help="'1,5,7', '1-499', '1-3,10', or a CSV file with a 'run' column")
     ap.add_argument("--data", required=True, help="dataset root holding run_<N>/ folders")
     ap.add_argument("--staging", required=True, help="where the original VTUs are downloaded to")
     ap.add_argument("--workers", type=int, default=2)
