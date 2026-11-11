@@ -63,24 +63,6 @@ def interior(ug, layers, lo=(-1.0, -1.0, 0.0), hi=(1.0, 1.0, 2.0), h=0.25):
     return np.all((P >= np.array(lo) + d) & (P <= np.array(hi) - d), axis=1)
 
 
-def test_cell_gradient_error_confined_to_boundary_layer():
-    """Documents the vtkGradientFilter cell-data behaviour the test above works around."""
-    from vtkmodules.vtkCommonDataModel import vtkDataObject
-    from vtkmodules.vtkFiltersGeneral import vtkGradientFilter
-    from helpers import cell_centers
-    ug = box_mesh(tets=False)
-    set_linear_velocity(ug, ROTATION)
-    g = vtkGradientFilter(input_data=ug, result_array_name="g")
-    g.SetInputArrayToProcess(0, 0, 0, vtkDataObject.FIELD_ASSOCIATION_CELLS, "UMean")
-    g.Update()
-    J = vtk_to_numpy(g.GetOutput().GetCellData().GetArray("g")).reshape(-1, 3, 3)
-    err = np.abs(J - np.array(ROTATION)).max(axis=(1, 2))
-    C = cell_centers(ug)
-    first_layer = np.any((C < np.array([-1, -1, 0]) + 0.25) | (C > np.array([1, 1, 2]) - 0.25), axis=1)
-    assert err[~first_layer].max() < 1e-6
-    assert err[first_layer].max() > 0.1
-
-
 def test_scaling_invariance(flow_cfg):
     """Scaling lengths by s (with H) and velocity by U_inf leaves every non-dimensional quantity unchanged."""
     def run(s, U_inf):

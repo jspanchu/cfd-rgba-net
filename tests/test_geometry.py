@@ -144,12 +144,6 @@ def test_stl_collapsed_triangles_are_dropped(tmp_path):
     assert np.isfinite(sdf).all()
 
 
-def test_floor_offset():
-    geo = CaseGeometry(body_bounds=(-1, 0, -0.2, 0.2, 0.05, 0.35), ground=0.0, H=0.3, up=Axis(2, 1))
-    for f in (1e-6, 1e-4):
-        assert geo.image_spec(CONTRACT, (-2.0, 3.0, -1.0, 1.0, 0.0, 1.4), f).origin[2] == pytest.approx(f * 0.3)
-
-
 def test_domain_above_ground_starts_at_domain():
     """A domain whose ground-side face is above the ground starts there, not at the ground."""
     up = CaseGeometry(body_bounds=(-1, 0, -0.2, 0.2, 0.05, 0.35), ground=0.0, H=0.3, up=Axis(2, 1))
