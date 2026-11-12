@@ -22,14 +22,16 @@ class ResBlock(nn.Module):
     cin : int
         Input channels.
     cout : int
-        Output channels. A conv 1³ on the residual path matches them when ``cin != cout``.
+        Output channels. A conv 1³ and instance norm on the residual path match them when ``cin != cout``.
+        The norm keeps that path bounded: without it, the decoder's skip convs grew until fp16 overflowed.
     """
 
     def __init__(self, cin: int, cout: int):
         super().__init__()
         self.conv1, self.norm1 = conv3(cin, cout), nn.InstanceNorm3d(cout, affine=True)
         self.conv2, self.norm2 = conv3(cout, cout), nn.InstanceNorm3d(cout, affine=True)
-        self.skip = nn.Identity() if cin == cout else nn.Conv3d(cin, cout, 1)
+        self.skip = nn.Identity() if cin == cout else nn.Sequential(
+            nn.Conv3d(cin, cout, 1, bias=False), nn.InstanceNorm3d(cout, affine=True))
         self.act = nn.LeakyReLU(0.01)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -53,7 +55,9 @@ class UNet3D(nn.Module):
     def __init__(self, in_channels: int = 6):
         super().__init__()
         c = CHANNELS
-        self.stem = conv3(in_channels, c[0])
+        # Normalized, unlike a bare conv: the raw inputs reach tens (scaled C_p), and without the norm the
+        # unnormalized skip convs of the decoder blew up and the loss went NaN within 300 steps.
+        self.stem = nn.Sequential(conv3(in_channels, c[0]), nn.InstanceNorm3d(c[0], affine=True), nn.LeakyReLU(0.01))
         self.enc0 = res_blocks(c[0], c[0], 2)
         # Encoders 1-3 and the bottleneck: strided conv, then 2 residual blocks.
         self.down = nn.ModuleList(conv3(c[i - 1], c[i], stride=2) for i in range(1, 5))
