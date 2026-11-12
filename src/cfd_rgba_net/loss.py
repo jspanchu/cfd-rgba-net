@@ -43,7 +43,9 @@ class DeepSupervisionLoss(nn.Module):
         self.register_buffer("weights", weights)
         self.eps = eps
 
-    def forward(self, outputs: list[torch.Tensor], labels: torch.Tensor, core: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, outputs: list[torch.Tensor], labels: torch.Tensor, core: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute the total loss.
 
         Parameters
@@ -60,15 +62,21 @@ class DeepSupervisionLoss(nn.Module):
         -------
         torch.Tensor
             Scalar ``sum(DEEP_WEIGHTS[i] * loss(outputs[i]))``.
+        torch.Tensor
+            The full-resolution terms for logging, detached, ``(3,)``: cross-entropy, then ``1 - Dice``
+            for vortex and for shear layer.
         """
         target = (labels[:, 0] + 2 * labels[:, 1]).long()  # 0 none, 1 vortex, 2 shear layer
-        total = 0.0
+        total, full = 0.0, None
         for i, (scale, logits) in enumerate(zip(DEEP_WEIGHTS, outputs)):
             s = 2**i  # labels and mask of the coarser heads are subsampled to match
-            total = total + scale * self.level_loss(logits, target[:, ::s, ::s, ::s], core[:, ::s, ::s, ::s])
-        return total
+            terms = self.level_loss(logits, target[:, ::s, ::s, ::s], core[:, ::s, ::s, ::s])
+            total = total + scale * terms.sum()
+            full = terms.detach() if full is None else full
+        return total, full
 
     def level_loss(self, logits: torch.Tensor, target: torch.Tensor, core: torch.Tensor) -> torch.Tensor:
+        # returns the cross-entropy and the two Dice losses, shape (3,)
         n_core = core.sum().clamp(min=1)
         ce = (F.cross_entropy(logits, target, weight=self.weights, reduction="none") * core).sum() / n_core
 
@@ -77,4 +85,4 @@ class DeepSupervisionLoss(nn.Module):
         y = F.one_hot(target, 3).movedim(-1, 1) * core[:, None]
         dims = (0, 2, 3, 4)
         dice = (2 * (p * y).sum(dims) + self.eps) / (p.sum(dims) + y.sum(dims) + self.eps)
-        return ce + (1 - dice[1:]).sum()
+        return torch.stack([ce, *(1 - dice[1:])])

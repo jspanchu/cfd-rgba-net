@@ -35,23 +35,23 @@ def test_class_weights_are_capped_inverse_frequencies():
 
 def test_perfect_prediction_gives_zero_loss(loss_fn):
     labels, core = make_batch()
-    assert loss_fn(perfect_logits(labels), labels, core).item() == pytest.approx(0, abs=1e-4)
+    assert loss_fn(perfect_logits(labels), labels, core)[0].item() == pytest.approx(0, abs=1e-4)
 
 
 def test_values_outside_the_core_do_not_change_the_loss(loss_fn):
     labels, core = make_batch()
     logits = [torch.randn(2, 3, *(s,) * 3) for s in SHAPES]
-    before = loss_fn(logits, labels, core)
+    before = loss_fn(logits, labels, core)[0]
     for i, x in enumerate(logits):
         outside = ~core[:, ::2**i, ::2**i, ::2**i]
         x.permute(0, 2, 3, 4, 1)[outside] = 100.0
     labels[:, 0][~core] = 1  # so are the labels (vortex here, never both classes at once)
     labels[:, 1][~core] = 0
-    assert loss_fn(logits, labels, core).item() == pytest.approx(before.item())
+    assert loss_fn(logits, labels, core)[0].item() == pytest.approx(before.item())
 
 
 def test_gradients_are_finite_without_labelled_voxels(loss_fn):
     labels, core = make_batch(labelled=False)
     logits = [torch.randn(2, 3, *(s,) * 3, requires_grad=True) for s in SHAPES]
-    loss_fn(logits, labels, core).backward()
+    loss_fn(logits, labels, core)[0].backward()
     assert all(torch.isfinite(x.grad).all() for x in logits)
