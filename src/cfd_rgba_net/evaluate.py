@@ -80,7 +80,7 @@ def surface(mask: np.ndarray) -> np.ndarray:
     return mask & ~ndi.binary_erosion(mask)
 
 
-def class_counts(pred: np.ndarray, ref: np.ndarray, region: np.ndarray) -> dict[str, int]:
+def class_counts(pred: np.ndarray, ref: np.ndarray, region: np.ndarray, surface_dice: bool = True) -> dict[str, int]:
     """Count what the metrics need for one class in one region.
 
     Parameters
@@ -91,6 +91,8 @@ def class_counts(pred: np.ndarray, ref: np.ndarray, region: np.ndarray) -> dict[
         Bool mask of the class in the reference labels.
     region : numpy.ndarray
         Bool mask of the voxels that count.
+    surface_dice : bool, optional
+        False skips the surface counts, which take about half the scoring time; they read 0.
 
     Returns
     -------
@@ -100,12 +102,12 @@ def class_counts(pred: np.ndarray, ref: np.ndarray, region: np.ndarray) -> dict[
         other's boundary, and all boundary voxels. Counts add up across runs.
     """
     pred, ref = pred & region, ref & region
-    sp, sr = surface(pred), surface(ref)
-    return dict(
-        inter=int((pred & ref).sum()), pred=int(pred.sum()), ref=int(ref.sum()),
-        surf_match=int((sp & ndi.binary_dilation(sr)).sum() + (sr & ndi.binary_dilation(sp)).sum()),
-        surf=int(sp.sum() + sr.sum()),
-    )
+    counts = dict(inter=int((pred & ref).sum()), pred=int(pred.sum()), ref=int(ref.sum()), surf_match=0, surf=0)
+    if surface_dice:
+        sp, sr = surface(pred), surface(ref)
+        counts["surf_match"] = int((sp & ndi.binary_dilation(sr)).sum() + (sr & ndi.binary_dilation(sp)).sum())
+        counts["surf"] = int(sp.sum() + sr.sum())
+    return counts
 
 
 def metrics(c: dict[str, int]) -> dict[str, float | None]:
@@ -127,7 +129,8 @@ def metrics(c: dict[str, int]) -> dict[str, float | None]:
                 surface_dice=ratio(c["surf_match"], c["surf"]))
 
 
-def score(pred: np.ndarray, ref: np.ndarray, core: np.ndarray, body_proximity: np.ndarray) -> dict:
+def score(pred: np.ndarray, ref: np.ndarray, core: np.ndarray, body_proximity: np.ndarray,
+          surface_dice: bool = True) -> dict:
     """Count one case's agreement with the reference, per region and class.
 
     Parameters
@@ -140,6 +143,8 @@ def score(pred: np.ndarray, ref: np.ndarray, core: np.ndarray, body_proximity: n
         Bool ``(nx, ny, nz)``, the voxels that count.
     body_proximity : numpy.ndarray
         The body proximity channel, ``(nx, ny, nz)``.
+    surface_dice : bool, optional
+        False skips the surface counts, as in ``class_counts``.
 
     Returns
     -------
@@ -148,7 +153,7 @@ def score(pred: np.ndarray, ref: np.ndarray, core: np.ndarray, body_proximity: n
         0.25 H of the body) and ``far`` (beyond 4 H from it).
     """
     regions = dict(all=core, near_body=core & (body_proximity >= NEAR_BODY), far=core & (body_proximity == 0))
-    return {r: {name: class_counts(pred == k + 1, ref == k + 1, m) for k, name in enumerate(CLASS_NAMES)}
+    return {r: {name: class_counts(pred == k + 1, ref == k + 1, m, surface_dice) for k, name in enumerate(CLASS_NAMES)}
             for r, m in regions.items()}
 
 
@@ -174,7 +179,7 @@ def with_metrics(s: dict) -> dict:
 
 def evaluate_run(
     path: Path, model: torch.nn.Module | None, contract: Contract, rules: LabelRules, device: torch.device,
-    baseline: bool = False, probs: Path | None = None,
+    baseline: bool = False, probs: Path | None = None, surface_dice: bool = True,
 ) -> dict:
     """Score the net and, if asked, the baseline on one case.
 
@@ -193,7 +198,10 @@ def evaluate_run(
     baseline : bool, optional
         Also score the voxel-grid baseline.
     probs : pathlib.Path or None, optional
-        Write the net's vortex and shear-layer probabilities here as a float32 ``.npy``, ``(2, nx, ny, nz)``.
+        Write the net's vortex and shear-layer probabilities to a Zarr store here, as float32 arrays
+        ``p_vortex`` and ``p_shear_layer`` on the case's grid. They are 0 outside the core.
+    surface_dice : bool, optional
+        False skips the surface counts, as in ``class_counts``.
 
     Returns
     -------
@@ -207,11 +215,17 @@ def evaluate_run(
     out = {}
     if model is not None:
         p = predict(model, x, input_scales(contract), device) * torch.from_numpy(core)  # 0 outside the core
-        out["net"] = score(p.argmax(0).numpy(), ref, core, x[4])
+        out["net"] = score(p.argmax(0).numpy(), ref, core, x[4], surface_dice)
         if probs is not None:
-            np.save(probs, p[1:].numpy())
+            out_store = zarr.open_group(probs, mode="w")
+            grid = store.attrs["grid"]
+            # origin and spacing in x, y, z order and dimension_names, so the ParaView Zarr reader places
+            # the arrays on the case's grid: without names it reads a 3D array as (z, y, x).
+            out_store.attrs.update(origin=grid["origin"], spacing=grid["dx"])
+            for name, a in zip(("p_vortex", "p_shear_layer"), p[1:].numpy()):
+                out_store.create_array(name, data=a, dimension_names=("x", "y", "z"))
     if baseline:
-        out["baseline"] = score(baseline_classes(x, core, contract, rules), ref, core, x[4])
+        out["baseline"] = score(baseline_classes(x, core, contract, rules), ref, core, x[4], surface_dice)
     return out
 
 
@@ -266,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     scores = []
     for run in runs:
-        probs = args.out / f"run{run}_probs.npy" if args.probs else None
+        probs = args.out / f"run{run}_probs.zarr" if args.probs else None
         scores.append(evaluate_run(store_path(cfg, args.stores, run), model, contract, rules, device,
                                    args.baseline, probs))
         (args.out / f"run{run}.json").write_text(
