@@ -37,6 +37,9 @@ def test_save_case_zarr_round_trips_and_replaces_an_existing_store(tmp_path):
     np.testing.assert_array_equal(store["ingredients"]["core"][...], core)
     assert store.attrs["tag"] == "second" and store.attrs["x"] == 1.5
     assert store.attrs["grid"]["dims"] == list(SPEC.dims)
+    assert store.attrs["origin"] == list(SPEC.origin) and store.attrs["spacing"] == SPEC.dx
+    assert store["inputs"].metadata.dimension_names == ("c", "x", "y", "z")
+    assert store["ingredients"]["core"].metadata.dimension_names == ("x", "y", "z")
     assert "only_in_first" not in store.attrs                       # replaced, not merged
     assert [p.name for p in tmp_path.iterdir()] == ["case.zarr"]    # no .tmp or .old left behind
 

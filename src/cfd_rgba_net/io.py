@@ -133,11 +133,13 @@ def _put(group, name: str, a: np.ndarray):
     name : str
         The array's name.
     a : numpy.ndarray
-        The values, shaped ``(..., nx, ny, nz)``.
+        The values, shaped ``(nx, ny, nz)`` or ``(C, nx, ny, nz)``.
     """
     lead = a.shape[:-3]
+    # Axis names let readers such as the ParaView Zarr reader tell (c, x, y, z) from their (c, z, y, x) default.
+    names = ("c",) * len(lead) + ("x", "y", "z")
     arr = group.create_array(name, shape=a.shape, dtype=a.dtype, chunks=lead + (CHUNK,) * 3,
-                             shards=lead + (SHARD,) * 3, compressors=COMPRESSOR)
+                             shards=lead + (SHARD,) * 3, compressors=COMPRESSOR, dimension_names=names)
     arr[...] = a
 
 
@@ -174,13 +176,14 @@ def save_case_zarr(path: Path, spec: ImageSpec, arrays: dict[str, np.ndarray],
     path : pathlib.Path
         The store's location. Its parent directory must exist.
     spec : ImageSpec
-        The voxel grid. Saved in the root attributes as ``grid``.
+        The voxel grid. Saved in the root attributes as ``grid``, and as ``origin`` and ``spacing`` in x, y, z
+        order for readers that place the arrays from those attributes.
     arrays : dict[str, numpy.ndarray]
         Arrays stored at the root, shaped ``(..., nx, ny, nz)``.
     groups : dict[str, dict[str, numpy.ndarray]]
         Sub-groups by name, each holding arrays shaped ``(..., nx, ny, nz)``.
     attrs : dict
-        Root attributes, converted with ``jsonable``. Must not have a ``grid`` key.
+        Root attributes, converted with ``jsonable``. Must not have a ``grid``, ``origin`` or ``spacing`` key.
     """
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
@@ -193,7 +196,7 @@ def save_case_zarr(path: Path, spec: ImageSpec, arrays: dict[str, np.ndarray],
         g = root.create_group(gname)
         for name, a in members.items():
             _put(g, name, a)
-    root.attrs.update(jsonable(dict(grid=spec.to_dict(), **attrs)))
+    root.attrs.update(jsonable(dict(grid=spec.to_dict(), origin=list(spec.origin), spacing=spec.dx, **attrs)))
     if path.exists():
         shutil.rmtree(old, ignore_errors=True)
         path.rename(old)
