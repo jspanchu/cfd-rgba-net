@@ -27,3 +27,14 @@ sdf_exact_band_H: 1.0
 
 # There is no box: the grid fills the dataset's domain (`domain` in configs/datasets/<name>.yaml,
 # default the mesh bounds) at training, and the user's chosen region at inference. Only dx is fixed.
+
+# Each input channel is divided by its scale before the model sees it. No mean is subtracted, so 0 stays 0.
+# Computed once over the fluid voxels of the AhmedML train split (368 runs, 15,436,115,335 voxels) by
+# scripts/ahmedml/compute_scales.py. u, v and w share one scale, sqrt(mean(u^2 + v^2 + w^2) / 3), so the
+# 48 axis-aligned orientations, which swap and sign-flip them, leave it unchanged. Cp, body_proximity and
+# ground_proximity each use their own standard deviation.
+input_scales:
+  velocity: 0.585942
+  Cp: 0.0373487
+  body_proximity: 0.202054
+  ground_proximity: 0.241939

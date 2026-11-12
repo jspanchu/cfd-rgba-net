@@ -21,10 +21,13 @@ src/cfd_rgba_net/
     label.py                    label rules v1 on the voxel grid
     io.py                       Zarr v3 case store, vti writer, provenance (git commit, input SHA-256)
     build_case.py               one training case, end to end (CLI: cfd-rgba-net-build-case)
+    loader.py                   96^3 training patches from the case stores of one split (PyTorch dataset)
 tests/                          verification suite (pytest)
 scripts/ahmedml/
     fix_wedges.py               rewrites the AhmedML VTUs with VTK's wedge point order (source of jspanchu/ahmedml)
     figures.py                  progress figures from the ahmedml_run<N>.zarr stores
+    make_splits.py              assigns every run to a split (configs/splits/ahmedml_v1.csv)
+    compute_scales.py           input scales of the train split, for configs/contract_v1.yaml
 ```
 
 Input channels (contract v1.0) are `u, v, w` (velocity / U_inf along the mesh's own x, y, z axes), `Cp`,

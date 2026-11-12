@@ -40,6 +40,36 @@ class LabelResult:
     fractions: dict
 
 
+def core_mask(fluid: np.ndarray, height_H: np.ndarray, rules: LabelRules, n_per_H: int) -> tuple[np.ndarray, np.ndarray]:
+    """Compute the core, the voxels where labels may be set.
+
+    The wall erosion removes the fluid voxels within ``rules.wall_erosion_voxels(n_per_H)`` voxels of a
+    non-fluid one, with face-connected (6-neighbour) steps, so diagonal neighbours do not erode. It also
+    treats everything outside the array as non-fluid.
+
+    Parameters
+    ----------
+    fluid : numpy.ndarray
+        Boolean array ``(nx, ny, nz)``: voxels inside the mesh and outside the body.
+    height_H : numpy.ndarray
+        Height above the ground in units of H. Broadcasts against ``fluid``.
+    rules : LabelRules
+        The label thresholds.
+    n_per_H : int
+        Voxels per reference length H, from the contract.
+
+    Returns
+    -------
+    fluid_eroded : numpy.ndarray
+        Boolean ``(nx, ny, nz)``: the fluid mask after the wall erosion.
+    core : numpy.ndarray
+        Boolean ``(nx, ny, nz)``: ``fluid_eroded`` above the floor, ``rules.floor_exclude_H``.
+    """
+    erosion = rules.wall_erosion_voxels(n_per_H)
+    fluid_eroded = ndi.binary_erosion(fluid, iterations=erosion) if erosion > 0 else fluid.copy()
+    return fluid_eroded, fluid_eroded & (height_H >= rules.floor_exclude_H)
+
+
 def make_labels(ing: dict[str, np.ndarray], fluid: np.ndarray, spec: ImageSpec, geo: CaseGeometry,
                 rules: LabelRules, n_per_H: int) -> LabelResult:
     """Apply the label rules to the ingredients on the voxel grid.
@@ -47,10 +77,9 @@ def make_labels(ing: dict[str, np.ndarray], fluid: np.ndarray, spec: ImageSpec, 
     The rules are in the module docstring. Their text in ``describe`` repeats them: keep the two in step,
     and bump ``LABEL_RULES_VERSION`` when a rule changes.
 
-    The wall erosion removes the fluid voxels within ``rules.wall_erosion_voxels(n_per_H)`` voxels of a
-    non-fluid one, with face-connected (6-neighbour) steps, so diagonal neighbours do not erode. It also
-    treats everything outside the grid as non-fluid: no label is ever set on the grid's outermost layers.
-    That is intended where the grid fills the mesh's domain, whose faces are mesh boundaries.
+    The core comes from ``core_mask``, which treats everything outside the grid as non-fluid: no label is
+    ever set on the grid's outermost layers. That is intended where the grid fills the mesh's domain, whose
+    faces are mesh boundaries.
 
     Parameters
     ----------
@@ -75,10 +104,7 @@ def make_labels(ing: dict[str, np.ndarray], fluid: np.ndarray, spec: ImageSpec, 
         all fluid voxels, not only the core: fluid voxels removed by the erosion or the floor rule are
         in ``"none"``.
     """
-    erosion = rules.wall_erosion_voxels(n_per_H)
-    fluid_eroded = ndi.binary_erosion(fluid, iterations=erosion) if erosion > 0 else fluid.copy()
-    above_floor = geo.height_above_ground(spec) >= rules.floor_exclude_H * geo.H
-    core = fluid_eroded & above_floor
+    fluid_eroded, core = core_mask(fluid, geo.height_above_ground(spec) / geo.H, rules, n_per_H)
 
     vortex = (ing["lambda2_nd"] < -rules.tau_lambda2) & (ing["Q_nd"] > 0) & core
     shear = (ing["omega_mag_nd"] > rules.tau_omega) & ~vortex & core
