@@ -134,6 +134,23 @@ def orient(a: np.ndarray, perm: tuple[int, ...], sign: np.ndarray) -> np.ndarray
     return a[(...,) + tuple(slice(None, None, int(s)) for s in sign)]
 
 
+def input_scales(contract: Contract) -> np.ndarray:
+    """Read the scales that divide the input channels, from ``input_scales`` of the contract file.
+
+    Parameters
+    ----------
+    contract : Contract
+        The input contract, which names the channels.
+
+    Returns
+    -------
+    numpy.ndarray
+        Float32, one scale per channel. u, v and w share one: the orientations swap them.
+    """
+    scale = _load(configs_dir() / "contract_v1.yaml")["input_scales"]
+    return np.array([scale["velocity"]] * 3 + [scale[c] for c in contract.channels[3:]], np.float32)
+
+
 class PatchDataset(IterableDataset):
     """An endless stream of training patches from the runs of one split.
 
@@ -170,8 +187,7 @@ class PatchDataset(IterableDataset):
         cfg, self.contract, self.rules = CaseConfig.load(dataset), Contract.load(), LabelRules.load()
         self.stores = {r: store_path(cfg, Path(stores), r) for r in self.runs}
         self.index = {r: load_index(s, r, Path(cache)) for r, s in self.stores.items()}
-        scale = _load(configs_dir() / "contract_v1.yaml")["input_scales"]  # one for u, v and w: orientations swap them
-        self.scale = np.array([scale["velocity"]] * 3 + [scale[c] for c in self.contract.channels[3:]], np.float32)
+        self.scale = input_scales(self.contract)
 
     def sample_centre(self, rng: np.random.Generator) -> tuple[int, str, np.ndarray]:
         """Draw a run, a kind of centre and a voxel.

@@ -19,6 +19,7 @@ dependencies = [
 [project.scripts]
 cfd-rgba-net-build-case = "cfd_rgba_net.build_case:main"
 cfd-rgba-net-batch = "cfd_rgba_net.batch:main"
+cfd-rgba-net-evaluate = "cfd_rgba_net.evaluate:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
