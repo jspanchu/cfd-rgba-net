@@ -84,7 +84,6 @@ def train(
     # the run length is unknown, so the decay follows the cap
     total_steps = cfg.max_epochs * cfg.steps_per_epoch
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda step: (1 - step / total_steps) ** 0.9)
-    scaler = torch.amp.GradScaler(enabled=cuda)
     batches = iter(DataLoader(dataset, cfg.batch_size, num_workers=cfg.workers, pin_memory=cuda))
     out.mkdir(parents=True, exist_ok=True)
     best, best_epoch = -1.0, 0
@@ -96,15 +95,17 @@ def train(
             torch.cuda.reset_peak_memory_stats(device)
         for _ in range(cfg.steps_per_epoch):
             batch = {k: v.to(device, non_blocking=True) for k, v in next(batches).items()}
-            with torch.autocast(device.type, enabled=cuda):
+            # bfloat16, not float16: instance norm of sparse features makes activations exceed the float16
+            # range (65,504), which turned the loss NaN after a few thousand steps. bfloat16 needs no scaler.
+            with torch.autocast(device.type, torch.bfloat16, enabled=cuda):
                 outputs = net(batch["inputs"])
             loss, terms = loss_fn([o.float() for o in outputs], batch["labels"], batch["core"])
+            if not loss.isfinite():  # stop at once: every later step would be wasted
+                raise FloatingPointError(f"non-finite loss in epoch {epoch}")
             opt.zero_grad(set_to_none=True)
-            scaler.scale(loss).backward()
-            scaler.unscale_(opt)
+            loss.backward()
             nn.utils.clip_grad_norm_(net.parameters(), cfg.clip_norm)
-            scaler.step(opt)
-            scaler.update()
+            opt.step()
             sched.step()
             loss_sum, terms_sum = loss_sum + loss.item(), terms_sum + terms
         log = {"epoch": epoch, "loss": loss_sum / cfg.steps_per_epoch,
