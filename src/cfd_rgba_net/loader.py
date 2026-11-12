@@ -171,6 +171,8 @@ class PatchDataset(IterableDataset):
         The dataset config, a name in configs/datasets/ or a YAML path.
     seed : int, optional
         The training run's seed.
+    runs : list[int] or None, optional
+        Keep only these runs of the split, such as a training subset. None keeps them all.
 
     Raises
     ------
@@ -178,11 +180,11 @@ class PatchDataset(IterableDataset):
         If a run appears more than once in the CSV, which would put it in two splits.
     """
 
-    def __init__(self, split, csv, stores, cache, dataset="ahmedml", seed=0):
+    def __init__(self, split, csv, stores, cache, dataset="ahmedml", seed=0, runs=None):
         df = pd.read_csv(csv)
         if df.run.duplicated().any():
             raise ValueError(f"{csv}: runs in more than one split: {sorted(df.run[df.run.duplicated()])}")
-        self.runs = df.run[df.split == split].tolist()
+        self.runs = [r for r in df.run[df.split == split] if runs is None or r in runs]
         self.seed = seed
         cfg, self.contract, self.rules = CaseConfig.load(dataset), Contract.load(), LabelRules.load()
         self.stores = {r: store_path(cfg, Path(stores), r) for r in self.runs}
