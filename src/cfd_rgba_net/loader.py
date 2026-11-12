@@ -173,6 +173,8 @@ class PatchDataset(IterableDataset):
         The training run's seed.
     runs : list[int] or None, optional
         Keep only these runs of the split, such as a training subset. None keeps them all.
+    augment : bool, optional
+        False keeps every patch in its stored orientation, for the one-case overfit check.
 
     Raises
     ------
@@ -180,12 +182,12 @@ class PatchDataset(IterableDataset):
         If a run appears more than once in the CSV, which would put it in two splits.
     """
 
-    def __init__(self, split, csv, stores, cache, dataset="ahmedml", seed=0, runs=None):
+    def __init__(self, split, csv, stores, cache, dataset="ahmedml", seed=0, runs=None, augment=True):
         df = pd.read_csv(csv)
         if df.run.duplicated().any():
             raise ValueError(f"{csv}: runs in more than one split: {sorted(df.run[df.run.duplicated()])}")
         self.runs = [r for r in df.run[df.split == split] if runs is None or r in runs]
-        self.seed = seed
+        self.seed, self.augment = seed, augment
         cfg, self.contract, self.rules = CaseConfig.load(dataset), Contract.load(), LabelRules.load()
         self.stores = {r: store_path(cfg, Path(stores), r) for r in self.runs}
         self.index = {r: load_index(s, r, Path(cache)) for r, s in self.stores.items()}
@@ -237,7 +239,7 @@ class PatchDataset(IterableDataset):
 
         inner = (...,) + (slice(1, -1),) * 3
         x, labels, core = x[inner] / self.scale[:, None, None, None], labels[inner], core[inner[1:]]
-        perm, sign = ORIENTATIONS[rng.integers(len(ORIENTATIONS))]
+        perm, sign = ORIENTATIONS[rng.integers(len(ORIENTATIONS)) if self.augment else 0]  # 0 is the identity
         x = orient(x, perm, sign)
         x[:3] = x[:3][list(perm)] * sign[:, None, None, None]  # the components follow the axes
         return {k: torch.from_numpy(np.ascontiguousarray(v)) for k, v in
