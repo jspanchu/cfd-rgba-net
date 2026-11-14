@@ -418,8 +418,8 @@ class CaseConfig:
         Parameters
         ----------
         path : str or pathlib.Path
-            The YAML file, or a bare dataset name such as ``"ahmedml"`` that resolves to
-            ``configs/datasets/<name>.yaml``.
+            The name of a dataset in configs/datasets/ or a YAML path.
+            A bare name like "name" resolves to ``"configs/datasets/name.yaml"
 
         Returns
         -------
@@ -429,11 +429,12 @@ class CaseConfig:
         Raises
         ------
         ValueError
-            If ``field_source`` is not ``"point"`` or ``"cell"``; if a velocity entry does not list three
-            components; if ``flow`` gives both or neither of
-            ``reference_probe`` and ``U_inf``; if ``reference_probe`` is not a point; if ``domain`` is
-            not ``mesh`` or six numbers with min below max on each axis; or if ``up_direction`` fails
-            ``check_up_axis_consistency``.
+            1. If ``field_source`` is not ``"point"`` or ``"cell"``.
+            2. If a velocity entry does not list three components.
+            3. If ``flow`` gives both or neither of ``reference_probe`` and ``U_inf``.
+            4. If ``reference_probe`` is not a point
+            5. If ``domain`` is not ``mesh`` or six numbers with min below max on each axis.
+            6. If ``up_direction`` fails ``check_up_axis_consistency``.
         """
         path = Path(path)
         if not path.exists() and not path.suffix:

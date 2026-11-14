@@ -157,32 +157,34 @@ def input_scales(contract: Contract) -> np.ndarray:
 class PatchDataset(IterableDataset):
     """An endless stream of training patches from the runs of one split.
 
-    Workers draw from generators seeded by ``(seed, worker id)``, so a seed and a worker count give the
-    same patches. An epoch is a number of batches the training loop picks, not a pass over the data.
+    The random sampler is seeded by ``(seed, worker id)``.
 
     Parameters
     ----------
     split : str
-        The split to load: a value of the CSV's ``split`` column.
+        This must be a value of the CSV's ``split`` column.
     csv : str or pathlib.Path
-        The split CSV, one row per run.
+        The split CSV where every run is listed once in a row with it's split and subset.
     stores : str or pathlib.Path
-        The folder of case stores.
+        The directory containing the zarr stores (inputs, labels)
     cache : str or pathlib.Path
-        The folder of sampling indices. Builds the missing ones, which takes a few seconds per run.
+        The directory containing the sampling indices. The loader builds the missing ones,
+        this can take a few seconds per run.
     dataset : str, optional
-        The dataset config, a name in configs/datasets/ or a YAML path.
+        The name of a dataset in configs/datasets/ or a YAML path.
+        A bare name like "name" resolves to ``"configs/datasets/name.yaml"
     seed : int, optional
-        The training run's seed.
+        The seed used by the loader's random sampler.
     runs : list[int] or None, optional
-        Keep only these runs of the split, such as a training subset. None keeps them all.
+        Dataset will keep only the provided runs of the given split, such as a training subset.
+        None keeps all.
     augment : bool, optional
-        False keeps every patch in its stored orientation, for the one-case overfit check.
+        False means use the dataset as is. True means to generate 48 different orientations of a cube.
 
     Raises
     ------
     ValueError
-        If a run appears more than once in the CSV, which would put it in two splits.
+        When the CSV has runs allocated to multiple runs. Done to prevent leakage.
     """
 
     def __init__(self, split, csv, stores, cache, dataset="ahmedml", seed=0, runs=None, augment=True):
