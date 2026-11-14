@@ -13,6 +13,7 @@ scales ``input_scales`` of configs/contract_v1.yaml, which scripts/ahmedml/compu
 from __future__ import annotations
 
 import itertools
+import os
 from pathlib import Path
 
 import numpy as np
@@ -80,8 +81,10 @@ def load_index(store_dir: Path, run: int, cache: Path) -> dict[str, np.ndarray]:
                 return {k: f[k] for k in KINDS}
     index = build_index(zarr.open_group(store_dir, mode="r"), run)
     cache.mkdir(parents=True, exist_ok=True)
-    np.savez(path.with_suffix(".tmp.npz"), stamp=stamp, **index)
-    path.with_suffix(".tmp.npz").rename(path)
+    # one temporary file per process: two training runs may build the same index at once
+    tmp = path.with_suffix(f".{os.getpid()}.tmp.npz")
+    np.savez(tmp, stamp=stamp, **index)
+    tmp.rename(path)
     return index
 
 
