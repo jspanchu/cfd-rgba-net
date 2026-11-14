@@ -1,0 +1,46 @@
+"""Verification: a run resumed from saved weights continues the epoch count and the learning-rate decay."""
+
+import json
+
+import torch
+from torch import nn
+from torch.utils.data import IterableDataset
+
+from cfd_rgba_net.loss import DeepSupervisionLoss
+from cfd_rgba_net.train import TrainConfig, train
+
+
+class Net(nn.Module):
+    """Stands in for the UNet: full-, half- and quarter-resolution logits in training."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Conv3d(6, 3, 1)
+
+    def forward(self, x):
+        out = self.conv(x)
+        return [out, out[:, :, ::2, ::2, ::2], out[:, :, ::4, ::4, ::4]] if self.training else out
+
+
+class Patches(IterableDataset):
+    seed = 0
+
+    def __iter__(self):
+        while True:
+            yield dict(inputs=torch.randn(6, 8, 8, 8), labels=torch.zeros(2, 8, 8, 8, dtype=torch.uint8),
+                       core=torch.ones(8, 8, 8, dtype=torch.bool))
+
+
+def run(cfg, tmp_path, capsys):
+    loss_fn = DeepSupervisionLoss(torch.ones(3))
+    train(Net(), Patches(), loss_fn, cfg, lambda model: (0.5, 0.5), tmp_path)
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+
+def test_resumed_run_continues_epochs_and_learning_rate(tmp_path, capsys):
+    base = dict(batch_size=2, steps_per_epoch=3, max_epochs=4, val_every=10, workers=0)
+    whole = run(TrainConfig(**base), tmp_path / "whole", capsys)
+    resumed = run(TrainConfig(**base, start_epoch=2), tmp_path / "resumed", capsys)
+
+    assert [log["epoch"] for log in resumed] == [3, 4]
+    assert [log["lr"] for log in resumed] == [log["lr"] for log in whole[2:]]
