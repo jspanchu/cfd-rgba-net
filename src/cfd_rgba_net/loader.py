@@ -189,9 +189,15 @@ class PatchDataset(IterableDataset):
 
     def __init__(self, split, csv, stores, cache, dataset="ahmedml", seed=0, runs=None, augment=True):
         df = pd.read_csv(csv)
-        if df.run.duplicated().any():
-            raise ValueError(f"{csv}: runs in more than one split: {sorted(df.run[df.run.duplicated()])}")
-        self.runs = [r for r in df.run[df.split == split] if runs is None or r in runs]
+        duplicates = df.run.duplicated()
+        if duplicates.any():
+            raise ValueError(f"{csv}: you have runs in more than one split: {sorted(df.run[duplicates])}")
+        self.runs = []
+        for r in df.run[df.split == split]:
+            if runs is None:
+                self.runs.append(r)
+            elif r in runs:
+                self.runs.append(r)
         self.seed, self.augment = seed, augment
         cfg, self.contract, self.rules = CaseConfig.load(dataset), Contract.load(), LabelRules.load()
         self.stores = {r: store_path(cfg, Path(stores), r) for r in self.runs}
