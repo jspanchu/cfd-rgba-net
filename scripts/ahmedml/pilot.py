@@ -46,8 +46,13 @@ def main():
     ap.add_argument("--levels", type=int, default=5, help="resolution levels of the UNet, 4 or 5")
     ap.add_argument("--norm", default="instance", choices=["instance", "group", "batch"], help="UNet normalisation")
     ap.add_argument("--batch-size", type=int, default=TrainConfig.batch_size, help="patches per GPU")
+    ap.add_argument("--patience", type=int, default=TrainConfig.patience, help="epochs without a better validation IoU")
+    ap.add_argument("--resume", type=Path, help="weights of an earlier run to continue from, with --start-epoch")
+    ap.add_argument("--start-epoch", type=int, default=0, help="epochs the --resume weights were trained for")
     ap.add_argument("--compile", action="store_true", help="torch.compile the training forward pass")
     args = ap.parse_args()
+    if bool(args.resume) != bool(args.start_epoch):
+        ap.error("--resume and --start-epoch go together")
 
     distributed = "RANK" in os.environ
     if distributed:
@@ -62,7 +67,8 @@ def main():
         train_runs = df.run[(df.split == "train") & (df["subset"] <= PILOT_SUBSET)].tolist()
         val_runs = df.run[df.split == "val"].tolist()[::5]  # a fixed 10 of the 50
     cfg = TrainConfig(seed=args.seed, max_epochs=args.max_epochs, val_every=args.val_every,
-                      batch_size=args.batch_size, compile=args.compile)
+                      batch_size=args.batch_size, compile=args.compile, patience=args.patience,
+                      start_epoch=args.start_epoch)
     dataset = PatchDataset("train", args.csv, args.stores, args.cache,
                            runs=train_runs, seed=args.seed, augment=not args.no_augment)
     ds_cfg, contract, rules = CaseConfig.load("ahmedml"), Contract.load(), LabelRules.load()
@@ -75,6 +81,8 @@ def main():
 
     seed_everything(args.seed)
     model = UNet3D(len(contract.channels), args.levels, args.norm).to(device)
+    if args.resume:
+        model.load_state_dict(torch.load(args.resume, map_location=device, weights_only=True))
     loss_fn = DeepSupervisionLoss(class_weights(CLASS_FRACTIONS, args.w_max)).to(device)
     train(model, dataset, loss_fn, cfg, validate, args.out)
 
