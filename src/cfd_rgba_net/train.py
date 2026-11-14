@@ -30,6 +30,7 @@ class TrainConfig:
     val_every: int = 10  # epochs
     seed: int = 0
     workers: int = 4
+    compile: bool = False  # torch.compile the training forward pass
 
 
 def seed_everything(seed: int) -> None:
@@ -80,6 +81,8 @@ def train(
     cuda = device.type == "cuda"
     dataset.seed = cfg.seed + rank
     net = DistributedDataParallel(model, device_ids=[device.index]) if dist.is_initialized() else model
+    # Only the training forward is compiled: validation calls ``model`` with other shapes, which would recompile.
+    forward = torch.compile(net) if cfg.compile else net
     opt = torch.optim.SGD(net.parameters(), cfg.lr, cfg.momentum, nesterov=True, weight_decay=cfg.weight_decay)
     # the run length is unknown, so the decay follows the cap
     total_steps = cfg.max_epochs * cfg.steps_per_epoch
@@ -98,7 +101,7 @@ def train(
             # bfloat16, not float16: instance norm of sparse features makes activations exceed the float16
             # range (65,504), which turned the loss NaN after a few thousand steps. bfloat16 needs no scaler.
             with torch.autocast(device.type, torch.bfloat16, enabled=cuda):
-                outputs = net(batch["inputs"])
+                outputs = forward(batch["inputs"])
             loss, terms = loss_fn([o.float() for o in outputs], batch["labels"], batch["core"])
             if not loss.isfinite():  # stop at once: every later step would be wasted
                 raise FloatingPointError(f"non-finite loss in epoch {epoch}")
@@ -119,7 +122,9 @@ def train(
                 # The other ranks wait in the broadcast below, so a validation longer than the NCCL
                 # timeout (10 minutes by default) kills the run: raise the timeout if it does.
                 model.eval()
+                val_start = time.time()
                 log["val_iou"] = validate(model)
+                log["val_s"] = time.time() - val_start
                 score = float(np.mean(log["val_iou"]))
                 if score > best:
                     best, best_epoch = score, epoch

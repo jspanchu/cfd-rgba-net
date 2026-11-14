@@ -46,6 +46,7 @@ def main():
     ap.add_argument("--levels", type=int, default=5, help="resolution levels of the UNet, 4 or 5")
     ap.add_argument("--norm", default="instance", choices=["instance", "group", "batch"], help="UNet normalisation")
     ap.add_argument("--batch-size", type=int, default=TrainConfig.batch_size, help="patches per GPU")
+    ap.add_argument("--compile", action="store_true", help="torch.compile the training forward pass")
     args = ap.parse_args()
 
     distributed = "RANK" in os.environ
@@ -61,7 +62,7 @@ def main():
         train_runs = df.run[(df.split == "train") & (df["subset"] <= PILOT_SUBSET)].tolist()
         val_runs = df.run[df.split == "val"].tolist()[::5]  # a fixed 10 of the 50
     cfg = TrainConfig(seed=args.seed, max_epochs=args.max_epochs, val_every=args.val_every,
-                      batch_size=args.batch_size)
+                      batch_size=args.batch_size, compile=args.compile)
     dataset = PatchDataset("train", args.csv, args.stores, args.cache,
                            runs=train_runs, seed=args.seed, augment=not args.no_augment)
     ds_cfg, contract, rules = CaseConfig.load("ahmedml"), Contract.load(), LabelRules.load()
