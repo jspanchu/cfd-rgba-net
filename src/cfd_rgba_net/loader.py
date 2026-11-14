@@ -172,7 +172,7 @@ class PatchDataset(IterableDataset):
         this can take a few seconds per run.
     dataset : str, optional
         The name of a dataset in configs/datasets/ or a YAML path.
-        A bare name like "name" resolves to ``"configs/datasets/name.yaml"
+        A bare name like "name" resolves to ``"configs/datasets/name.yaml"``
     seed : int, optional
         The seed used by the loader's random sampler.
     runs : list[int] or None, optional
