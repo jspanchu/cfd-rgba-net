@@ -31,6 +31,7 @@ class TrainConfig:
     seed: int = 0
     workers: int = 4
     compile: bool = False  # torch.compile the training forward pass
+    start_epoch: int = 0  # epochs already trained, when the model holds the weights of an earlier run
 
 
 def seed_everything(seed: int) -> None:
@@ -69,7 +70,9 @@ def train(
     loss_fn : callable
         ``DeepSupervisionLoss``, returning the total loss and its logged terms.
     cfg : TrainConfig
-        The hyperparameters.
+        The hyperparameters. To resume, load the earlier weights into ``model`` and set ``start_epoch`` to the
+        epochs they were trained for: the epoch count and the learning rate continue from there, but the
+        optimizer's momentum starts empty.
     validate : callable
         Takes the model in eval mode and returns the validation IoU of vortex and shear layer.
         Placeholder until the task 6 harness exists; task 7 wires it in, together with a command line.
@@ -84,14 +87,15 @@ def train(
     # Only the training forward is compiled: validation calls ``model`` with other shapes, which would recompile.
     forward = torch.compile(net) if cfg.compile else net
     opt = torch.optim.SGD(net.parameters(), cfg.lr, cfg.momentum, nesterov=True, weight_decay=cfg.weight_decay)
-    # the run length is unknown, so the decay follows the cap
+    # the run length is unknown, so the decay follows the cap; a resumed run continues the earlier run's decay
     total_steps = cfg.max_epochs * cfg.steps_per_epoch
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda step: (1 - step / total_steps) ** 0.9)
+    done_steps = cfg.start_epoch * cfg.steps_per_epoch
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda step: (1 - (done_steps + step) / total_steps) ** 0.9)
     batches = iter(DataLoader(dataset, cfg.batch_size, num_workers=cfg.workers, pin_memory=cuda))
     out.mkdir(parents=True, exist_ok=True)
     best, best_epoch = -1.0, 0
 
-    for epoch in range(1, cfg.max_epochs + 1):
+    for epoch in range(cfg.start_epoch + 1, cfg.max_epochs + 1):
         net.train()
         loss_sum, terms_sum, start = 0.0, torch.zeros(3, device=device), time.time()
         if cuda:
@@ -111,7 +115,7 @@ def train(
             opt.step()
             sched.step()
             loss_sum, terms_sum = loss_sum + loss.item(), terms_sum + terms
-        log = {"epoch": epoch, "loss": loss_sum / cfg.steps_per_epoch,
+        log = {"epoch": epoch, "lr": sched.get_last_lr()[0], "loss": loss_sum / cfg.steps_per_epoch,
                "terms": (terms_sum / cfg.steps_per_epoch).tolist(),
                "steps_per_s": cfg.steps_per_epoch / (time.time() - start),
                "peak_gpu_gib": torch.cuda.max_memory_allocated(device) / 2**30 if cuda else None}
