@@ -48,6 +48,7 @@ testpaths = ["tests"]
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
+typeCheckingMode = "standard"
 
 [tool.ty.environment]
 python = ".venv"
