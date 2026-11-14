@@ -535,3 +535,18 @@ class CaseConfig:
         d = asdict(self)
         d["velocity"] = [v.label() for v in self.velocity]
         return d
+
+    def case_tag(self, run: int) -> str:
+        """Name one case, the stem of its store and logs.
+
+        Parameters
+        ----------
+        run : int
+            The run number.
+
+        Returns
+        -------
+        str
+            ``<dataset>_run<run>`` with the dataset name in lower case.
+        """
+        return f"{self.dataset.lower()}_run{run}"

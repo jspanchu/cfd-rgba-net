@@ -29,7 +29,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .build_case import case_tag
+from .build_case import store_path
 from .config import CaseConfig
 
 
@@ -101,26 +101,6 @@ def download(cfg: CaseConfig, run: int, work: Path) -> None:
               flush=True)
 
 
-def store_path(cfg: CaseConfig, out: Path, run: int) -> Path:
-    """Locate the Zarr store of one run, which exists once the run is built.
-
-    Parameters
-    ----------
-    cfg : CaseConfig
-        The dataset configuration.
-    out : pathlib.Path
-        The output directory.
-    run : int
-        The run number.
-
-    Returns
-    -------
-    pathlib.Path
-        ``<out>/<dataset>_run<run>.zarr``, named as ``build_case`` names it.
-    """
-    return out / f"{case_tag(cfg, run)}.zarr"
-
-
 def build(cfg: CaseConfig, run: int, args: argparse.Namespace) -> bool:
     """Build one run with ``cfd_rgba_net.build_case`` in a subprocess.
 
@@ -143,7 +123,7 @@ def build(cfg: CaseConfig, run: int, args: argparse.Namespace) -> bool:
     bool
         True if the subprocess exited with 0 and the run's store exists.
     """
-    log = args.out / f"log_{case_tag(cfg, run)}.txt"
+    log = args.out / f"log_{cfg.case_tag(run)}.txt"
     print(f"[run] build run_{run} (log {log})", flush=True)
     cmd = [sys.executable, "-u", "-m", "cfd_rgba_net.build_case", "--dataset", args.dataset, "--run", str(run),
            "--data", str(args.work), "--out", str(args.out), "--threads", str(args.threads)]

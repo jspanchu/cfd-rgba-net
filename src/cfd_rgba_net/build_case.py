@@ -27,24 +27,6 @@ if TYPE_CHECKING:
     from .config import CaseConfig, Contract, LabelRules
 
 
-def case_tag(cfg: CaseConfig, run: int) -> str:
-    """Name one case, the stem of its store and logs.
-
-    Parameters
-    ----------
-    cfg : CaseConfig
-        The dataset configuration.
-    run : int
-        The run number.
-
-    Returns
-    -------
-    str
-        ``<dataset>_run<run>`` with the dataset name in lower case.
-    """
-    return f"{cfg.dataset.lower()}_run{run}"
-
-
 def setup_threads(n: int | None = None) -> int:
     """Set the thread counts of OpenMP, MKL, OpenBLAS and VTK's SMP tools.
 
@@ -94,6 +76,25 @@ def read_geo_parameters(path: Path) -> dict[str, float]:
         rows = list(csv.reader(fh))
     return {k.strip(): float(v) for k, v in zip(rows[0], rows[1])}
 
+
+def store_path(cfg: CaseConfig, out: Path, run: int) -> Path:
+    """Locate the Zarr store of one run, which exists once the run is built.
+
+    Parameters
+    ----------
+    cfg : CaseConfig
+        The dataset configuration.
+    out : pathlib.Path
+        The output directory.
+    run : int
+        The run number.
+
+    Returns
+    -------
+    pathlib.Path
+        ``<out>/<dataset>_run<run>.zarr``, named as ``build_case`` names it.
+    """
+    return out / f"{cfg.case_tag(run)}.zarr"
 
 def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contract, rules: LabelRules,
                save_vti: bool = False, log=print, max_voxels: int = 300_000_000) -> dict:
@@ -162,7 +163,7 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
         log(f"[{time.time() - t0:6.0f}s] {msg}")
 
     out.mkdir(parents=True, exist_ok=True)
-    tag = case_tag(cfg, run)
+    tag = cfg.case_tag(run)
     volume_path = cfg.path("volume", data, run)
     body_path = cfg.path("body", data, run)
     geo_path = cfg.path("geo_parameters", data, run) if "geo_parameters" in cfg.files else None
@@ -246,7 +247,7 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
         vtk_threads=vtkSMPTools.GetEstimatedNumberOfThreads(),
         runtime_s=time.time() - t0,
     )
-    io.save_case_zarr(out / f"{tag}.zarr", spec,
+    io.save_case_zarr(store_path(cfg, out, run), spec,
                       arrays=dict(inputs=inp.inputs, labels=lab.labels),
                       groups=dict(ingredients={**{k: v.astype("float32") for k, v in ing.items()}, "core": lab.core}),
                       attrs=meta)
