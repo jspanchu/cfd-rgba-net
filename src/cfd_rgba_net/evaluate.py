@@ -37,6 +37,7 @@ STEP = PATCH // 2  # windows overlap by half
 # net trained with the pilot's settings scored a far-field shear-layer IoU of 0.05 without the margin and 0.42
 # with it. Half a stride keeps every grid edge away from the window edges.
 PAD = STEP // 2
+WINDOW_BATCH = 8  # windows per forward pass
 NEAR_BODY = 0.9375  # body_proximity of 0.25 H from the body: 1 - 0.25 / 4
 COUNTS = ("inter", "pred", "ref", "surf_match", "surf")
 
@@ -47,7 +48,8 @@ def predict(model: torch.nn.Module, x: np.ndarray, scale: np.ndarray, device: to
 
     The case gets a zero margin of ``PAD`` voxels on every side, and windows are zero-padded where they leave
     that. Their predictions are blended with a Gaussian weight (sigma = 1/8 of the window), so a window's centre
-    counts more than its edges. The margin is cut off again before the function returns.
+    counts more than its edges. The margin is cut off again before the function returns. On a GPU the windows
+    run in bfloat16, as the training steps do.
 
     Parameters
     ----------
@@ -58,12 +60,13 @@ def predict(model: torch.nn.Module, x: np.ndarray, scale: np.ndarray, device: to
     scale : numpy.ndarray
         The per-channel scales that divide the inputs, ``(6,)``.
     device : torch.device
-        Where the windows run. The rest stays on the CPU, so the case size is not limited by GPU memory.
+        Where the windows run and their predictions are blended. Blending on a GPU takes about 12 bytes per
+        voxel of the padded case there, which is about 1 GiB for an AhmedML case; the inputs stay on the CPU.
 
     Returns
     -------
     torch.Tensor
-        Float32 probabilities of none, vortex and shear layer, ``(3, nx, ny, nz)``.
+        Float32 probabilities of none, vortex and shear layer, ``(3, nx, ny, nz)``, on ``device``.
     """
     dims = x.shape[1:]
     inner = (slice(None),) + tuple(slice(PAD, PAD + n) for n in dims)  # the case within the padded volume
@@ -73,13 +76,17 @@ def predict(model: torch.nn.Module, x: np.ndarray, scale: np.ndarray, device: to
 
     g = torch.arange(PATCH) - (PATCH - 1) / 2
     g = torch.exp(-g**2 / (2 * (PATCH / 8) ** 2))
-    weight = g[:, None, None] * g[None, :, None] * g[None, None, :]
-    total, norm = torch.zeros(3, *size), torch.zeros(*size)
-    for corner in itertools.product(*(range(0, n - PATCH + 1, STEP) for n in size)):
-        win = tuple(slice(c, c + PATCH) for c in corner)
-        p = model(xp[(slice(None),) + win][None].to(device)).softmax(1)[0].cpu()
-        total[(slice(None),) + win] += p * weight
-        norm[win] += weight
+    weight = (g[:, None, None] * g[None, :, None] * g[None, None, :]).to(device)
+    total, norm = torch.zeros(3, *size, device=device), torch.zeros(*size, device=device)
+    wins = [tuple(slice(c, c + PATCH) for c in corner)
+            for corner in itertools.product(*(range(0, n - PATCH + 1, STEP) for n in size))]
+    for batch in itertools.batched(wins, WINDOW_BATCH):
+        inputs = torch.stack([xp[(slice(None),) + win] for win in batch]).to(device)
+        with torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
+            logits = model(inputs)
+        for win, p in zip(batch, logits.float().softmax(1)):
+            total[(slice(None),) + win] += p * weight
+            norm[win] += weight
     return (total / norm)[inner]
 
 
@@ -221,15 +228,15 @@ def evaluate_run(
     core = core_mask(x[4] < 1, (1 - x[5]) * contract.ground_proximity_range_H, rules, contract.n_per_H)[1]
     out = {}
     if model is not None:
-        p = predict(model, x, input_scales(contract), device) * torch.from_numpy(core)  # 0 outside the core
-        out["net"] = score(p.argmax(0).numpy(), ref, core, x[4], surface_dice)
+        p = predict(model, x, input_scales(contract), device) * torch.from_numpy(core).to(device)  # 0 outside the core
+        out["net"] = score(p.argmax(0).cpu().numpy(), ref, core, x[4], surface_dice)
         if probs is not None:
             out_store = zarr.open_group(probs, mode="w")
             grid = store.attrs["grid"]
             # origin and spacing in x, y, z order and dimension_names, so the ParaView Zarr reader places
             # the arrays on the case's grid: without names it reads a 3D array as (z, y, x).
             out_store.attrs.update(origin=grid["origin"], spacing=grid["dx"])
-            for name, a in zip(("p_vortex", "p_shear_layer"), p[1:].numpy()):
+            for name, a in zip(("p_vortex", "p_shear_layer"), p[1:].cpu().numpy()):
                 out_store.create_array(name, data=a, dimension_names=("x", "y", "z"))
     if baseline:
         out["baseline"] = score(baseline_classes(x, core, contract, rules), ref, core, x[4], surface_dice)
