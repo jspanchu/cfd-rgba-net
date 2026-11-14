@@ -32,6 +32,11 @@ from .loader import PATCH, input_scales
 from .model import UNet3D
 
 STEP = PATCH // 2  # windows overlap by half
+# Zero margin around the case. Without it the grid's low edges, above all the floor, sit on a window's edge, where
+# the net lacks the zero context that training patches at the grid edge have. On the 10 fixed validation runs, a
+# net trained with the pilot's settings scored a far-field shear-layer IoU of 0.05 without the margin and 0.42
+# with it. Half a stride keeps every grid edge away from the window edges.
+PAD = STEP // 2
 NEAR_BODY = 0.9375  # body_proximity of 0.25 H from the body: 1 - 0.25 / 4
 COUNTS = ("inter", "pred", "ref", "surf_match", "surf")
 
@@ -40,8 +45,9 @@ COUNTS = ("inter", "pred", "ref", "surf_match", "surf")
 def predict(model: torch.nn.Module, x: np.ndarray, scale: np.ndarray, device: torch.device) -> torch.Tensor:
     """Run the net over a whole case with overlapping windows.
 
-    Windows are zero-padded where they leave the grid. Their predictions are blended with a Gaussian weight
-    (sigma = 1/8 of the window), so a window's centre counts more than its edges.
+    The case gets a zero margin of ``PAD`` voxels on every side, and windows are zero-padded where they leave
+    that. Their predictions are blended with a Gaussian weight (sigma = 1/8 of the window), so a window's centre
+    counts more than its edges. The margin is cut off again before the function returns.
 
     Parameters
     ----------
@@ -60,9 +66,10 @@ def predict(model: torch.nn.Module, x: np.ndarray, scale: np.ndarray, device: to
         Float32 probabilities of none, vortex and shear layer, ``(3, nx, ny, nz)``.
     """
     dims = x.shape[1:]
-    size = [PATCH + STEP * -(-max(n - PATCH, 0) // STEP) for n in dims]  # sides the windows tile exactly
+    inner = (slice(None),) + tuple(slice(PAD, PAD + n) for n in dims)  # the case within the padded volume
+    size = [PATCH + STEP * -(-max(n + 2 * PAD - PATCH, 0) // STEP) for n in dims]  # sides the windows tile exactly
     xp = torch.zeros(6, *size)
-    xp[(slice(None),) + tuple(slice(n) for n in dims)] = torch.from_numpy(x / scale[:, None, None, None])
+    xp[inner] = torch.from_numpy(x / scale[:, None, None, None])
 
     g = torch.arange(PATCH) - (PATCH - 1) / 2
     g = torch.exp(-g**2 / (2 * (PATCH / 8) ** 2))
@@ -73,7 +80,7 @@ def predict(model: torch.nn.Module, x: np.ndarray, scale: np.ndarray, device: to
         p = model(xp[(slice(None),) + win][None].to(device)).softmax(1)[0].cpu()
         total[(slice(None),) + win] += p * weight
         norm[win] += weight
-    return (total / norm)[(slice(None),) + tuple(slice(n) for n in dims)]
+    return (total / norm)[inner]
 
 
 def surface(mask: np.ndarray) -> np.ndarray:
