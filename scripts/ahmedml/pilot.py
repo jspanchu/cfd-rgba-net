@@ -42,6 +42,10 @@ def main():
     ap.add_argument("--max-epochs", type=int, default=TrainConfig.max_epochs)
     ap.add_argument("--val-every", type=int, default=TrainConfig.val_every)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--w-max", type=float, default=100.0, help="cap on the foreground class weights of the loss")
+    ap.add_argument("--levels", type=int, default=5, help="resolution levels of the UNet, 4 or 5")
+    ap.add_argument("--norm", default="instance", choices=["instance", "group", "batch"], help="UNet normalisation")
+    ap.add_argument("--batch-size", type=int, default=TrainConfig.batch_size, help="patches per GPU")
     args = ap.parse_args()
 
     distributed = "RANK" in os.environ
@@ -56,7 +60,8 @@ def main():
     else:
         train_runs = df.run[(df.split == "train") & (df["subset"] <= PILOT_SUBSET)].tolist()
         val_runs = df.run[df.split == "val"].tolist()[::5]  # a fixed 10 of the 50
-    cfg = TrainConfig(seed=args.seed, max_epochs=args.max_epochs, val_every=args.val_every)
+    cfg = TrainConfig(seed=args.seed, max_epochs=args.max_epochs, val_every=args.val_every,
+                      batch_size=args.batch_size)
     dataset = PatchDataset("train", args.csv, args.stores, args.cache,
                            runs=train_runs, seed=args.seed, augment=not args.no_augment)
     ds_cfg, contract, rules = CaseConfig.load("ahmedml"), Contract.load(), LabelRules.load()
@@ -68,8 +73,8 @@ def main():
         return tuple(metrics(pool(runs)["all"][c])["iou"] for c in CLASS_NAMES)
 
     seed_everything(args.seed)
-    model = UNet3D(len(contract.channels)).to(device)
-    loss_fn = DeepSupervisionLoss(class_weights(CLASS_FRACTIONS)).to(device)
+    model = UNet3D(len(contract.channels), args.levels, args.norm).to(device)
+    loss_fn = DeepSupervisionLoss(class_weights(CLASS_FRACTIONS, args.w_max)).to(device)
     train(model, dataset, loss_fn, cfg, validate, args.out)
 
 
