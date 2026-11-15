@@ -27,7 +27,7 @@ from cfd_rgba_net.evaluate import evaluate_run, metrics, pool
 from cfd_rgba_net.label import CLASS_NAMES
 from cfd_rgba_net.loader import PatchDataset
 from cfd_rgba_net.loss import DeepSupervisionLoss, class_weights
-from cfd_rgba_net.model import UNet3D
+from cfd_rgba_net.model import DerivedFeatures, UNet3D
 from cfd_rgba_net.train import TrainConfig, seed_everything, train
 
 # Fraction of core voxels labelled vortex and shear layer in the sampled train patches (roadmap, task 4).
@@ -51,6 +51,9 @@ def main():
     ap.add_argument("--w-max", type=float, default=100.0, help="cap on the foreground class weights of the loss")
     ap.add_argument("--levels", type=int, default=5, help="resolution levels of the UNet, 4 or 5")
     ap.add_argument("--norm", default="instance", choices=["instance", "group", "batch"], help="UNet normalisation")
+    ap.add_argument("--derived", action="store_true",
+                    help="append lambda2, Q and |omega| (squashed around the rule thresholds) to the net's inputs")
+    ap.add_argument("--prior", action="store_true", help="add the rules' margins to the logits (needs --derived)")
     ap.add_argument("--batch-size", type=int, default=TrainConfig.batch_size, help="patches per GPU")
     ap.add_argument("--patience", type=int, default=TrainConfig.patience, help="epochs without a better validation IoU")
     ap.add_argument("--resume", type=Path, help="weights of an earlier run to continue from, with --start-epoch")
@@ -86,7 +89,8 @@ def main():
         return tuple(metrics(pool(runs)["all"][c])["iou"] for c in CLASS_NAMES)
 
     seed_everything(args.seed)
-    model = UNet3D(len(contract.channels), args.levels, args.norm).to(device)
+    features = DerivedFeatures.from_configs(contract, rules) if args.derived else None
+    model = UNet3D(len(contract.channels), args.levels, args.norm, features, args.prior).to(device)
     if args.resume:
         model.load_state_dict(torch.load(args.resume, map_location=device, weights_only=True))
     loss_fn = DeepSupervisionLoss(class_weights(CLASS_FRACTIONS, args.w_max)).to(device)
