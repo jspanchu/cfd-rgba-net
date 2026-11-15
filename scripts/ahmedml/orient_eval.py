@@ -26,7 +26,7 @@ from cfd_rgba_net.config import CaseConfig, Contract, LabelRules, configs_dir
 from cfd_rgba_net.evaluate import metrics, pool, predict, score
 from cfd_rgba_net.label import CLASS_NAMES, core_mask
 from cfd_rgba_net.loader import input_scales, orient
-from cfd_rgba_net.model import UNet3D
+from cfd_rgba_net.model import DerivedFeatures, UNet3D
 
 # name: (perm, sign). New axis i is old axis perm[i], flipped where sign is -1. Each name says what the net
 # sees relative to the stored case, whose x is the flow direction, y the span and z the height.
@@ -78,6 +78,8 @@ def main():
     ap.add_argument("--csv", type=Path, default=configs_dir() / "splits" / "ahmedml_v1.csv")
     ap.add_argument("--nruns", type=int, default=10, help="score the first N of the pilot's fixed 10 validation runs")
     ap.add_argument("--levels", type=int, default=5, help="resolution levels of the UNet")
+    ap.add_argument("--derived", action="store_true", help="the checkpoints were trained with --derived")
+    ap.add_argument("--prior", action="store_true", help="the checkpoints were trained with --prior")
     ap.add_argument("--norm", default="instance", choices=["instance", "group", "batch"], help="UNet normalisation")
     args = ap.parse_args()
 
@@ -88,7 +90,8 @@ def main():
     scale = input_scales(contract)
     models = {}
     for path in args.checkpoints:
-        model = UNet3D(len(contract.channels), args.levels, args.norm).to(device).eval()
+        features = DerivedFeatures.from_configs(contract, rules) if args.derived else None
+        model = UNet3D(len(contract.channels), args.levels, args.norm, features, args.prior).to(device).eval()
         model.load_state_dict(torch.load(path, map_location=device, weights_only=True))
         models[str(path)] = model
 
