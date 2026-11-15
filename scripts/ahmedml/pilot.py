@@ -9,8 +9,8 @@ Example: use 2 gpus on a machine
 Example: run the overfit test
     python scripts/ahmedml/pilot.py ... --overfit 216 --max-epochs 40 --out runs/overfit
 
-By default it trains on the 100-run pilot subset of the train split and validates on a fixed 10 runs of the
-validation split. ``--overfit RUN`` trains and validates on that one run instead.
+By default it trains on the 100-run pilot subset of the train split (``--subset 368`` takes all of it) and
+validates on a fixed 10 runs of the validation split. ``--overfit RUN`` trains and validates on that one run instead.
 """
 import argparse
 import os
@@ -42,6 +42,8 @@ def main():
     ap.add_argument("--out", type=Path, required=True, help="where the weights go")
     ap.add_argument("--csv", type=Path, default=configs_dir() / "splits" / "ahmedml_v1.csv")
     ap.add_argument("--overfit", type=int, help="train and validate on this one run")
+    ap.add_argument("--subset", type=int, default=PILOT_SUBSET,
+                    help="train on the runs of the nested train subsets up to this size; 368 is the whole train split")
     ap.add_argument("--no-augment", action="store_true", help="keep the stored orientation of every patch")
     ap.add_argument("--max-epochs", type=int, default=TrainConfig.max_epochs)
     ap.add_argument("--val-every", type=int, default=TrainConfig.val_every)
@@ -68,7 +70,7 @@ def main():
     if args.overfit:
         train_runs = val_runs = [args.overfit]
     else:
-        train_runs = df.run[(df.split == "train") & (df["subset"] <= PILOT_SUBSET)].tolist()
+        train_runs = df.run[(df.split == "train") & (df["subset"] <= args.subset)].tolist()
         val_runs = df.run[df.split == "val"].tolist()[::5]  # a fixed 10 of the 50
     cfg = TrainConfig(seed=args.seed, max_epochs=args.max_epochs, val_every=args.val_every,
                       batch_size=args.batch_size, compile=args.compile, patience=args.patience,
