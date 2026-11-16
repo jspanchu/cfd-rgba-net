@@ -54,6 +54,8 @@ def main():
     ap.add_argument("--derived", action="store_true",
                     help="append lambda2, Q and |omega| (squashed around the rule thresholds) to the net's inputs")
     ap.add_argument("--prior", action="store_true", help="add the rules' margins to the logits (needs --derived)")
+    ap.add_argument("--prior-scale", type=float, default=4.0, help="starting scale of the --prior margins")
+    ap.add_argument("--warmup-epochs", type=int, default=0, help="epochs of linear learning-rate warm-up")
     ap.add_argument("--batch-size", type=int, default=TrainConfig.batch_size, help="patches per GPU")
     ap.add_argument("--patience", type=int, default=TrainConfig.patience, help="epochs without a better validation IoU")
     ap.add_argument("--resume", type=Path, help="weights of an earlier run to continue from, with --start-epoch")
@@ -77,7 +79,7 @@ def main():
         val_runs = df.run[df.split == "val"].tolist()[::5]  # a fixed 10 of the 50
     cfg = TrainConfig(seed=args.seed, max_epochs=args.max_epochs, val_every=args.val_every,
                       batch_size=args.batch_size, compile=args.compile, patience=args.patience,
-                      start_epoch=args.start_epoch)
+                      start_epoch=args.start_epoch, warmup_epochs=args.warmup_epochs)
     dataset = PatchDataset("train", args.csv, args.stores, args.cache,
                            runs=train_runs, seed=args.seed, augment=not args.no_augment)
     ds_cfg, contract, rules = CaseConfig.load("ahmedml"), Contract.load(), LabelRules.load()
@@ -90,7 +92,7 @@ def main():
 
     seed_everything(args.seed)
     features = DerivedFeatures.from_configs(contract, rules) if args.derived else None
-    model = UNet3D(len(contract.channels), args.levels, args.norm, features, args.prior).to(device)
+    model = UNet3D(len(contract.channels), args.levels, args.norm, features, args.prior, args.prior_scale).to(device)
     if args.resume:
         model.load_state_dict(torch.load(args.resume, map_location=device, weights_only=True))
     loss_fn = DeepSupervisionLoss(class_weights(CLASS_FRACTIONS, args.w_max)).to(device)
