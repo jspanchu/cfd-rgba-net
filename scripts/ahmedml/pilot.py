@@ -14,6 +14,8 @@ validates on a fixed 10 runs of the validation split. ``--overfit RUN`` trains a
 """
 import argparse
 import os
+import shlex
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -33,6 +35,24 @@ from cfd_rgba_net.train import TrainConfig, seed_everything, train
 # Fraction of core voxels labelled vortex and shear layer in the sampled train patches (roadmap, task 4).
 CLASS_FRACTIONS = (0.017, 0.029)
 PILOT_SUBSET = 100
+
+
+def command_line() -> str:
+    """Rebuild the command that started this process, for the first line of the log.
+
+    Returns
+    -------
+    str
+        ``# command: `` followed by the command as a shell takes it: ``CUDA_VISIBLE_DEVICES`` when it is set,
+        the Python interpreter relative to the working directory (``torchrun`` when it launched the process),
+        then the script and its arguments. The ``#`` keeps the line apart from the JSON lines of the epochs.
+    """
+    env = [f"CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}"] if "CUDA_VISIBLE_DEVICES" in os.environ else []
+    if "RANK" in os.environ:  # torchrun sets it; sys.argv then holds only the script and its arguments
+        launcher = ["torchrun", f"--nproc_per_node={os.environ['LOCAL_WORLD_SIZE']}"]
+    else:
+        launcher = [os.path.relpath(sys.executable)]
+    return "# command: " + shlex.join(env + launcher + sys.argv)
 
 
 def main():
@@ -66,6 +86,8 @@ def main():
         ap.error("--resume and --start-epoch go together")
 
     distributed = "RANK" in os.environ
+    if int(os.environ.get("RANK", 0)) == 0:  # one copy in the log, not one per GPU
+        print(command_line(), flush=True)
     if distributed:
         dist.init_process_group("nccl", timeout=timedelta(hours=1))  # rank 1 waits while rank 0 validates
         torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
