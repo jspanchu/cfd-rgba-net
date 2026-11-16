@@ -1,3 +1,4 @@
+# command: CUDA_VISIBLE_DEVICES=1 .venv/bin/python scripts/ahmedml/pilot.py --stores /data/cfd-rgba-net-data/ahmedML/out_v1 --cache /data/cfd-rgba-net-data/ahmedML/index --out runs/r3_group --max-epochs 150 --batch-size 4 --norm group
 {"epoch": 1, "loss": 6.110713286399841, "terms": [1.9350110292434692, 0.7518084049224854, 0.8022769093513489], "steps_per_s": 2.2558029945590277, "peak_gpu_gib": 14.405957221984863}
 {"epoch": 2, "loss": 4.887196081161499, "terms": [1.4702919721603394, 0.6508219838142395, 0.6835484504699707], "steps_per_s": 2.296601868260704, "peak_gpu_gib": 14.406713008880615}
 {"epoch": 3, "loss": 4.5893752784729, "terms": [1.4031392335891724, 0.603215754032135, 0.6249561309814453], "steps_per_s": 2.3007964863492623, "peak_gpu_gib": 14.405385494232178}

@@ -1,3 +1,4 @@
+# command: CUDA_VISIBLE_DEVICES=1 python scripts/ahmedml/pilot.py --stores /data/cfd-rgba-net-data/ahmedML/out_v1 --cache /data/cfd-rgba-net-data/ahmedML/index --overfit 216 --max-epochs 40 --derived --prior --out runs/overfit_derived_prior
 {"epoch": 1, "lr": 0.009774716137503496, "loss": 2.3229389996528624, "terms": [0.5593774318695068, 0.2108406275510788, 0.43221142888069153], "steps_per_s": 4.268441467121416, "peak_gpu_gib": 4.016690731048584}
 {"epoch": 2, "lr": 0.009548853816214998, "loss": 1.646036512374878, "terms": [0.35539570450782776, 0.18908953666687012, 0.35288459062576294], "steps_per_s": 4.290203958738635, "peak_gpu_gib": 4.016515731811523}
 {"epoch": 3, "lr": 0.009322396265394996, "loss": 1.3735794332027436, "terms": [0.29477164149284363, 0.15279871225357056, 0.30534467101097107], "steps_per_s": 4.254512516710532, "peak_gpu_gib": 4.016469955444336}

@@ -1,3 +1,4 @@
+# command: CUDA_VISIBLE_DEVICES=0 .venv/bin/python scripts/ahmedml/pilot.py --stores /data/cfd-rgba-net-data/ahmedML/out_v1 --cache /data/cfd-rgba-net-data/ahmedML/index --subset 368 --max-epochs 500 --val-every 25 --patience 500 --batch-size 4 --w-max 10 --seed 0 --compile --out runs/full_s0
 {"epoch": 1, "lr": 0.009981998198678612, "loss": 3.7495685539245605, "terms": [0.7318188548088074, 0.6570860743522644, 0.7735755443572998], "steps_per_s": 1.777470394591864, "peak_gpu_gib": 6.554013252258301}
 {"epoch": 2, "lr": 0.00996399278941777, "loss": 2.8910735750198366, "terms": [0.5185712575912476, 0.5380185842514038, 0.6021199226379395], "steps_per_s": 2.6377463301992194, "peak_gpu_gib": 6.5544867515563965}
 {"epoch": 3, "lr": 0.009945983764247315, "loss": 2.5848464002609255, "terms": [0.4597371816635132, 0.48274537920951843, 0.5367448329925537], "steps_per_s": 3.0149668264974943, "peak_gpu_gib": 6.554051876068115}

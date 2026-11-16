@@ -1,3 +1,4 @@
+# command: CUDA_VISIBLE_DEVICES=0 .venv/bin/python scripts/ahmedml/pilot.py --stores /data/cfd-rgba-net-data/ahmedML/out_v1 --cache /data/cfd-rgba-net-data/ahmedML/index --subset 100 --max-epochs 300 --val-every 25 --patience 300 --batch-size 4 --w-max 10 --seed 0 --compile --derived --prior --prior-scale 10 --warmup-epochs 2 --out runs/prior_s10_100
 W1115 17:04:15.768000 719826 torch/_inductor/utils.py:1806] [0/0] Not enough SMs to use max_autotune_gemm mode
 {"epoch": 1, "lr": 0.005004937486926843, "loss": 1.4981380224227905, "terms": [0.3247888684272766, 0.1482420563697815, 0.2453085482120514], "steps_per_s": 1.7139932177145054, "peak_gpu_gib": 6.628830909729004}
 {"epoch": 2, "lr": 0.009939979950939289, "loss": 0.9933017678260804, "terms": [0.2525835335254669, 0.13236647844314575, 0.18562869727611542], "steps_per_s": 2.714244652454554, "peak_gpu_gib": 6.627076625823975}
