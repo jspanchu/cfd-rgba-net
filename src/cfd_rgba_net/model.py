@@ -245,6 +245,10 @@ class UNet3D(nn.Module):
     prior : bool
         Add the label rules' margins to the logits, with learnable scales, and start the heads at 0 so that
         the untrained model reproduces the rules. Needs ``features``.
+    prior_scale : float
+        Starting value of the two learnable scales on the margins. The margins lie in (-1, 1) and are about
+        -0.76 in quiet flow, so a small scale leaves the foreground probabilities there well above 0 and the
+        loss far from the rules', although the argmax matches them.
 
     Raises
     ------
@@ -253,13 +257,13 @@ class UNet3D(nn.Module):
     """
 
     def __init__(self, in_channels: int = 6, levels: int = 5, norm: str = "instance",
-                 features: DerivedFeatures | None = None, prior: bool = False):
+                 features: DerivedFeatures | None = None, prior: bool = False, prior_scale: float = 4.0):
         super().__init__()
         if prior and features is None:
             raise ValueError("prior needs features")
         self.features, self.prior = features, prior
         # scales of the vortex and shear-layer margins; the softmax saturates away from the thresholds
-        self.prior_scale = nn.Parameter(torch.full((2,), 4.0)) if prior else None
+        self.prior_scale = nn.Parameter(torch.full((2,), float(prior_scale))) if prior else None
         if features is not None:
             in_channels += DerivedFeatures.N_FEATURES
         if not 4 <= levels <= len(CHANNELS):
