@@ -32,6 +32,7 @@ class TrainConfig:
     workers: int = 4
     compile: bool = False  # torch.compile the training forward pass
     start_epoch: int = 0  # epochs already trained, when the model holds the weights of an earlier run
+    warmup_epochs: int = 0  # the learning rate rises linearly from 0 over these epochs, counted from epoch 1
 
 
 def seed_everything(seed: int) -> None:
@@ -90,7 +91,14 @@ def train(
     # the run length is unknown, so the decay follows the cap; a resumed run continues the earlier run's decay
     total_steps = cfg.max_epochs * cfg.steps_per_epoch
     done_steps = cfg.start_epoch * cfg.steps_per_epoch
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda step: (1 - (done_steps + step) / total_steps) ** 0.9)
+    warmup_steps = cfg.warmup_epochs * cfg.steps_per_epoch
+
+    def lr_factor(step: int) -> float:
+        done = done_steps + step
+        ramp = min(1.0, (done + 1) / warmup_steps) if warmup_steps else 1.0  # + 1: the first step is not at 0
+        return ramp * (1 - done / total_steps) ** 0.9
+
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_factor)
     batches = iter(DataLoader(dataset, cfg.batch_size, num_workers=cfg.workers, pin_memory=cuda))
     out.mkdir(parents=True, exist_ok=True)
     best, best_epoch = -1.0, 0

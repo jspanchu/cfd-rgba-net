@@ -44,3 +44,12 @@ def test_resumed_run_continues_epochs_and_learning_rate(tmp_path, capsys):
 
     assert [log["epoch"] for log in resumed] == [3, 4]
     assert [log["lr"] for log in resumed] == [log["lr"] for log in whole[2:]]
+
+
+def test_warmup_ramps_the_learning_rate_then_rejoins_the_decay(tmp_path, capsys):
+    base = dict(batch_size=2, steps_per_epoch=3, max_epochs=4, val_every=10, workers=0)
+    plain = run(TrainConfig(**base), tmp_path / "plain", capsys)
+    warm = run(TrainConfig(**base, warmup_epochs=2), tmp_path / "warm", capsys)
+
+    assert warm[0]["lr"] < plain[0]["lr"]  # still ramping after epoch 1
+    assert [log["lr"] for log in warm[2:]] == [log["lr"] for log in plain[2:]]
