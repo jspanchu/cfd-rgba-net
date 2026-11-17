@@ -6,7 +6,7 @@ import torch
 
 from cfd_rgba_net.baseline import velocity_gradient
 from cfd_rgba_net.ingredients import lambda2, q_and_vorticity
-from cfd_rgba_net.model import DerivedFeatures, UNet3D
+from cfd_rgba_net.model import DerivedFeatures, PlainUNet3D, UNet3D
 
 
 @pytest.mark.parametrize("levels, norm", [(5, "instance"), (4, "instance"), (5, "group"), (5, "batch")])
@@ -93,3 +93,35 @@ def test_prior_model_trains_through_the_zero_initialised_heads():
 def test_prior_needs_features():
     with pytest.raises(ValueError):
         UNet3D(prior=True)
+
+
+FEATURES_ONLY = DerivedFeatures(0.585942, 0.202054, 32, 0.5, 2.0, keep_inputs=False)
+
+
+def test_features_only_stem_returns_the_appended_features_alone():
+    x = _synthetic_inputs()
+    np.testing.assert_array_equal(FEATURES_ONLY(x).numpy(), DERIVED(x)[:, 6:].numpy())
+
+
+@pytest.mark.parametrize("levels", [2, 4, 5])
+def test_plain_unet_output_shapes_in_eval_and_training(levels):
+    model = PlainUNet3D(levels=levels)
+    x = torch.randn(2, 6, 32, 48, 16)
+
+    model.eval()
+    assert model(x).shape == (2, 3, 32, 48, 16)
+
+    model.train()
+    (full,) = model(x)  # one head, no deep supervision
+    assert full.shape == (2, 3, 32, 48, 16)
+
+
+@pytest.mark.parametrize("net", [UNet3D, PlainUNet3D])
+def test_untrained_features_only_prior_model_matches_the_full_input_one(net):
+    # the prior reads the features wherever the stem puts them, so both stems start from the same rules
+    x = _synthetic_inputs()
+    full = net(features=DERIVED, prior=True).eval()
+    only = net(features=FEATURES_ONLY, prior=True).eval()
+    expected = full(x).argmax(1)
+    assert (expected > 0).any()
+    assert torch.equal(only(x).argmax(1), expected)

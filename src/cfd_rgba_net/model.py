@@ -1,4 +1,4 @@
-"""3D residual UNet that maps the 6 input channels to per-voxel class scores (none, vortex, shear layer)."""
+"""3D UNets, residual and plain, that map the input channels to per-voxel class scores (none, vortex, shear layer)."""
 
 from __future__ import annotations
 
@@ -102,17 +102,22 @@ class DerivedFeatures(nn.Module):
         Threshold of the vortex rule: ``lambda2* < -tau_lambda2``. Also the scale of the Q feature.
     tau_omega : float
         Threshold of the shear-layer rule: ``|omega|* > tau_omega``.
+    keep_inputs : bool
+        Return the inputs followed by the features. If false, return the features alone, so that the net
+        sees only the rules' quantities.
     """
 
     N_FEATURES = 3
 
-    def __init__(self, velocity_scale: float, body_scale: float, n_per_H: int, tau_lambda2: float, tau_omega: float):
+    def __init__(self, velocity_scale: float, body_scale: float, n_per_H: int, tau_lambda2: float, tau_omega: float,
+                 keep_inputs: bool = True):
         super().__init__()
         self.velocity_scale, self.body_scale, self.h = velocity_scale, body_scale, 1.0 / n_per_H
         self.tau_lambda2, self.tau_omega = tau_lambda2, tau_omega
+        self.keep_inputs = keep_inputs
 
     @classmethod
-    def from_configs(cls, contract: Contract, rules: LabelRules) -> "DerivedFeatures":
+    def from_configs(cls, contract: Contract, rules: LabelRules, keep_inputs: bool = True) -> "DerivedFeatures":
         """Build the stem from the contract and the label rules.
 
         Parameters
@@ -121,6 +126,8 @@ class DerivedFeatures(nn.Module):
             The input contract. Gives the scales of ``u`` and ``body_proximity`` and ``n_per_H``.
         rules : LabelRules
             The label thresholds.
+        keep_inputs : bool
+            See the class.
 
         Returns
         -------
@@ -129,7 +136,22 @@ class DerivedFeatures(nn.Module):
         """
         scales = input_scales(contract)
         return cls(float(scales[0]), float(scales[contract.channels.index("body_proximity")]),
-                   contract.n_per_H, rules.tau_lambda2, rules.tau_omega)
+                   contract.n_per_H, rules.tau_lambda2, rules.tau_omega, keep_inputs)
+
+    def out_channels(self, in_channels: int) -> int:
+        """Count the channels the stem returns.
+
+        Parameters
+        ----------
+        in_channels : int
+            Channels of the inputs.
+
+        Returns
+        -------
+        int
+            ``in_channels + 3``, or 3 without ``keep_inputs``.
+        """
+        return in_channels + self.N_FEATURES if self.keep_inputs else self.N_FEATURES
 
     def gradient(self, u: torch.Tensor, fluid: torch.Tensor) -> torch.Tensor:
         """Differentiate the velocity like ``baseline.velocity_gradient``.
@@ -198,6 +220,8 @@ class DerivedFeatures(nn.Module):
     @torch.no_grad()
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Append the three features to the inputs.
+        
+        Use tanh to convert hard thresholds to differentiable features.
 
         Parameters
         ----------
@@ -209,7 +233,8 @@ class DerivedFeatures(nn.Module):
         torch.Tensor
             The inputs with 3 more channels, ``(N, 9, D, H, W)``, in ``x``'s dtype: ``tanh((-lambda2* -
             tau_lambda2) / tau_lambda2)``, ``tanh(Q* / tau_lambda2)`` and ``tanh((|omega|* - tau_omega) /
-            tau_omega)``. Each is 0 on its rule's threshold.
+            tau_omega)``. Each is 0 on its rule's threshold. Without ``keep_inputs``, the 3 features alone,
+            ``(N, 3, D, H, W)``.
         """
         with torch.autocast(x.device.type, enabled=False):
             xf = x.float()
@@ -224,7 +249,29 @@ class DerivedFeatures(nn.Module):
             feats = torch.stack([torch.tanh((-lam2 - self.tau_lambda2) / self.tau_lambda2),
                                  torch.tanh(Q / self.tau_lambda2),
                                  torch.tanh((omega - self.tau_omega) / self.tau_omega)], dim=1)
-        return torch.cat([x, feats.to(x.dtype)], dim=1)
+        return torch.cat([x, feats.to(x.dtype)], dim=1) if self.keep_inputs else feats.to(x.dtype)
+
+
+def rule_logits(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    """Turn the stem's features into logits that argmax to the rules' classes.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        The stem's output, ``(N, C, D, H, W)``, with the 3 features as its last channels.
+    scale : torch.Tensor
+        Scales of the vortex and shear-layer margins, ``(2,)``.
+
+    Returns
+    -------
+    torch.Tensor
+        ``(N, 3, D, H, W)`` logits ``[0, a_v m_v, a_s m_s]``. ``m_v = min(f1, f2)`` is positive in a
+        vortex, and ``m_s = min(f3, -m_v)`` is positive in a shear layer that is not a vortex.
+    """
+    f1, f2, f3 = x[:, -3], x[:, -2], x[:, -1]
+    m_v = torch.minimum(f1, f2)
+    m_s = torch.minimum(f3, -m_v)
+    return torch.stack([torch.zeros_like(m_v), scale[0] * m_v, scale[1] * m_s], dim=1)
 
 
 class UNet3D(nn.Module):
@@ -240,8 +287,9 @@ class UNet3D(nn.Module):
     norm : str
         Kind of normalisation, see ``make_norm``.
     features : DerivedFeatures or None
-        Fixed stem that appends the rule quantities to the inputs, see ``DerivedFeatures``. The first conv
-        then takes ``in_channels + 3`` channels, so weights do not load across the two settings.
+        Fixed stem that appends the rule quantities to the inputs, or replaces the inputs with them, see
+        ``DerivedFeatures``. The first conv then takes ``in_channels + 3`` or 3 channels, so weights do not
+        load across the settings.
     prior : bool
         Add the label rules' margins to the logits, with learnable scales, and start the heads at 0 so that
         the untrained model reproduces the rules. Needs ``features``.
@@ -265,7 +313,7 @@ class UNet3D(nn.Module):
         # scales of the vortex and shear-layer margins; the softmax saturates away from the thresholds
         self.prior_scale = nn.Parameter(torch.full((2,), float(prior_scale))) if prior else None
         if features is not None:
-            in_channels += DerivedFeatures.N_FEATURES
+            in_channels = features.out_channels(in_channels)
         if not 4 <= levels <= len(CHANNELS):
             raise ValueError(f"levels must be between 4 and {len(CHANNELS)}, got {levels}")
         self.levels = levels
@@ -288,25 +336,6 @@ class UNet3D(nn.Module):
             for conv in (self.head, *self.aux):
                 nn.init.zeros_(conv.weight)
                 nn.init.zeros_(conv.bias)
-
-    def rule_logits(self, x: torch.Tensor) -> torch.Tensor:
-        """Turn the stem's features into logits that argmax to the rules' classes.
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            The inputs with the stem's features, ``(N, 9, D, H, W)``.
-
-        Returns
-        -------
-        torch.Tensor
-            ``(N, 3, D, H, W)`` logits ``[0, a_v m_v, a_s m_s]``. ``m_v = min(f1, f2)`` is positive in a
-            vortex, and ``m_s = min(f3, -m_v)`` is positive in a shear layer that is not a vortex.
-        """
-        f1, f2, f3 = x[:, 6], x[:, 7], x[:, 8]
-        m_v = torch.minimum(f1, f2)
-        m_s = torch.minimum(f3, -m_v)
-        return torch.stack([torch.zeros_like(m_v), self.prior_scale[0] * m_v, self.prior_scale[1] * m_s], dim=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor | list[torch.Tensor]:
         """Predict class scores.
@@ -337,7 +366,7 @@ class UNet3D(nn.Module):
 
         out = self.head(y)
         if self.prior:
-            rule = self.rule_logits(x)
+            rule = rule_logits(x, self.prior_scale)
             out = out + rule
         if not self.training:
             return out
@@ -346,3 +375,88 @@ class UNet3D(nn.Module):
         if self.prior:  # the same rules, averaged down to the half and quarter resolution
             aux = [a + F.avg_pool3d(rule, 2 ** (k + 1)) for k, a in enumerate(aux)]
         return [out, *aux]
+
+
+def double_conv(cin: int, cout: int, norm: str = "instance") -> nn.Sequential:
+    return nn.Sequential(conv3(cin, cout), make_norm(norm, cout), nn.ReLU(),
+                         conv3(cout, cout), make_norm(norm, cout), nn.ReLU())
+
+
+class PlainUNet3D(nn.Module):
+    """3D UNet after Ronneberger et al. (2015): no residual paths and a single head.
+
+    Each level has two 3³ convolutions, each followed by a norm and a ReLU, with "same" padding. Max-pooling
+    halves the grid on the way down; a transposed convolution doubles it on the way up, and the encoder's
+    features of that level are concatenated before the two convolutions.
+
+    Parameters
+    ----------
+    in_channels : int
+        Number of input channels (6 in contract v1).
+    levels : int
+        Number of resolution levels, bottleneck included, from 2 to 5. The widths are the first ``levels``
+        entries of ``CHANNELS``.
+    norm : str
+        Kind of normalisation, see ``make_norm``.
+    features : DerivedFeatures or None
+        Fixed stem in front of the first convolution, see ``DerivedFeatures``.
+    prior : bool
+        Add the label rules' margins to the logits, with learnable scales, and start the head at 0 so that
+        the untrained model reproduces the rules. Needs ``features``.
+    prior_scale : float
+        Starting value of the two learnable scales on the margins, see ``UNet3D``.
+
+    Raises
+    ------
+    ValueError
+        If ``levels`` is out of range, or ``prior`` is set without ``features``.
+    """
+
+    def __init__(self, in_channels: int = 6, levels: int = 4, norm: str = "instance",
+                 features: DerivedFeatures | None = None, prior: bool = False, prior_scale: float = 4.0):
+        super().__init__()
+        if prior and features is None:
+            raise ValueError("prior needs features")
+        if not 2 <= levels <= len(CHANNELS):
+            raise ValueError(f"levels must be between 2 and {len(CHANNELS)}, got {levels}")
+        self.features, self.prior = features, prior
+        self.prior_scale = nn.Parameter(torch.full((2,), float(prior_scale))) if prior else None
+        if features is not None:
+            in_channels = features.out_channels(in_channels)
+        c = CHANNELS[:levels]
+        self.enc = nn.ModuleList(double_conv(cin, cout, norm) for cin, cout in zip((in_channels, *c[:-1]), c))
+        # decoders, deepest first
+        self.up = nn.ModuleList(nn.ConvTranspose3d(c[i + 1], c[i], 2, 2) for i in range(levels - 2, -1, -1))
+        self.dec = nn.ModuleList(double_conv(2 * c[i], c[i], norm) for i in range(levels - 2, -1, -1))
+        self.head = nn.Conv3d(c[0], N_CLASSES, 1)
+        if prior:
+            nn.init.zeros_(self.head.weight)
+            nn.init.zeros_(self.head.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor | list[torch.Tensor]:
+        """Predict class scores.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Normalized inputs of shape (N, 6, D, H, W), with each side a multiple of ``2 ** (levels - 1)``.
+
+        Returns
+        -------
+        torch.Tensor or list[torch.Tensor]
+            Logits (not probabilities) of shape (N, 3, D, H, W) over none, vortex, shear layer. In training
+            mode, a list holding only those logits, the form ``DeepSupervisionLoss`` takes.
+        """
+        if self.features is not None:
+            x = self.features(x)
+        skips = []
+        y = x
+        for i, enc in enumerate(self.enc):
+            y = enc(F.max_pool3d(y, 2) if i else y)
+            skips.append(y)
+        for up, dec, skip in zip(self.up, self.dec, reversed(skips[:-1])):
+            y = dec(torch.cat([up(y), skip], dim=1))
+        out = self.head(y)
+        if self.prior:
+            out = out + rule_logits(x, self.prior_scale)
+        return [out] if self.training else out
