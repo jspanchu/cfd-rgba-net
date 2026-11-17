@@ -53,8 +53,8 @@ cfd-rgba-net-build-case --dataset ahmedml --run 1 --data <data> --out out_v1 --s
 # many runs: each run is downloaded from the dataset's Hugging Face repo (hf_repo in its YAML) into a
 # temporary work folder, built, and its downloaded files deleted, so only the Zarr stores are kept
 cfd-rgba-net-batch --dataset ahmedml --runs 1-499 \
-    --out /data/cfd-rgba-net-data/ahmedML/out_v1 --workers 6
-cfd-rgba-net-batch --dataset windsorml --runs 0-349 --out /data/cfd-rgba-net-data/windsorML/out_v1   # ~80 GB per build
+    --out /data2/cfd-rgba-net-data/ahmedML/out_v1 --workers 6
+cfd-rgba-net-batch --dataset windsorml --runs 0-349 --out /data2/cfd-rgba-net-data/windsorML/out_v1   # ~80 GB per build
 ```
 
 Each case writes one Zarr v3 store, `<dataset>_run<N>.zarr` (64^3 chunks in 256^3 shards, Blosc zstd):
