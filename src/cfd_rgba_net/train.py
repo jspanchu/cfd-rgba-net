@@ -69,7 +69,7 @@ def train(
         Yields patches with ``inputs``, ``labels`` and ``core``. Its ``seed`` is set to ``cfg.seed + rank``,
         so that ranks draw different patches.
     loss_fn : callable
-        ``DeepSupervisionLoss``, returning the total loss and its logged terms.
+        ``SegmentationLoss``, returning the total loss and its logged terms.
     cfg : TrainConfig
         The hyperparameters. To resume, load the earlier weights into ``model`` and set ``start_epoch`` to the
         epochs they were trained for: the epoch count and the learning rate continue from there, but the
@@ -113,8 +113,8 @@ def train(
             # bfloat16, not float16: instance norm of sparse features makes activations exceed the float16
             # range (65,504), which turned the loss NaN after a few thousand steps. bfloat16 needs no scaler.
             with torch.autocast(device.type, torch.bfloat16, enabled=cuda):
-                outputs = forward(batch["inputs"])
-            loss, terms = loss_fn([o.float() for o in outputs], batch["labels"], batch["core"])
+                logits = forward(batch["inputs"])
+            loss, terms = loss_fn(logits.float(), batch["labels"], batch["core"])
             if not loss.isfinite():  # stop at once: every later step would be wasted
                 raise FloatingPointError(f"non-finite loss in epoch {epoch}")
             opt.zero_grad(set_to_none=True)

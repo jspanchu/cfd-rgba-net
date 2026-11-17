@@ -19,11 +19,10 @@ STORES = Path(os.environ.get("CFD_RGBA_STORES", "/data/cfd-rgba-net-data/ahmedML
 def test_windowed_inference_matches_whole_volume():
     """A pointwise net gives the same answer however the volume is cut into windows."""
     torch.manual_seed(0)
-    model = torch.nn.Conv3d(6, 3, 1).eval()
-    x = np.random.default_rng(0).normal(size=(6, 130, 70, 50)).astype(np.float32)  # needs several padded windows
-    scale = np.linspace(0.5, 2, 6).astype(np.float32)
-    whole = model(torch.from_numpy(x / scale[:, None, None, None])[None]).softmax(1)[0]
-    assert (predict(model, x, scale, torch.device("cpu")) - whole).abs().max() < 1e-4
+    model = torch.nn.Conv3d(3, 3, 1).eval()
+    x = np.random.default_rng(0).normal(size=(3, 130, 70, 50)).astype(np.float32)  # needs several padded windows
+    whole = model(torch.from_numpy(x)[None]).softmax(1)[0]
+    assert (predict(model, x, torch.device("cpu")) - whole).abs().max() < 1e-4
 
 
 def test_metrics_match_hand_built_masks():

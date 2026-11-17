@@ -1,7 +1,8 @@
 """
 Voxel-grid baseline: label rules v1 applied to finite-difference gradients of the grid's own u, v, w.
 
-It needs no training. The net must beat it (the baseline gate in the roadmap).
+It needs no training. The net must beat it (the baseline gate in the roadmap). The same gradients give the
+net's inputs, ``grid_features``.
 """
 
 from __future__ import annotations
@@ -10,6 +11,10 @@ import numpy as np
 
 from .config import Contract, LabelRules
 from .ingredients import lambda2, q_and_vorticity
+
+# Channels of ``grid_features`` and of the stores' ``features`` array. Computed on the voxel grid, unlike the
+# ingredients of the same names, which come from the native mesh and define the labels.
+FEATURE_NAMES = ("lambda2", "Q", "omega_mag")
 
 
 def taps(a: np.ndarray, axis: int):
@@ -71,6 +76,29 @@ def velocity_gradient(u: np.ndarray, fluid: np.ndarray, core: np.ndarray, h: flo
             d4 = (8 * (f(1) - f(-1)) - (f(2) - f(-2))) / 12
             G[:, i, j] = (np.where(ok4, d4, np.where(ok2, d2, 0)) / h)[core]
     return G
+
+
+def grid_features(u: np.ndarray, fluid: np.ndarray, h: float) -> np.ndarray:
+    """Compute the rules' three quantities at every voxel, from the grid's own velocity.
+
+    Parameters
+    ----------
+    u : numpy.ndarray
+        Velocity / U_inf, ``(3, nx, ny, nz)``.
+    fluid : numpy.ndarray
+        Bool ``(nx, ny, nz)``, the voxels inside the mesh and outside the body (``body_proximity < 1``).
+    h : float
+        The voxel size in units of H, ``1 / n_per_H``, so the quantities are dimensionless.
+
+    Returns
+    -------
+    numpy.ndarray
+        Float32 ``(3, nx, ny, nz)``: lambda2*, Q* and |omega|*, in the order of ``FEATURE_NAMES``. Voxels
+        where no stencil fits, the body among them, get a zero gradient: lambda2* = Q* = |omega|* = 0.
+    """
+    G = velocity_gradient(u, fluid, np.ones(fluid.shape, bool), h)
+    Q, omega = q_and_vorticity(G)
+    return np.stack([lambda2(G), Q, omega]).reshape(3, *fluid.shape).astype(np.float32)
 
 
 def baseline_classes(x: np.ndarray, core: np.ndarray, contract: Contract, rules: LabelRules) -> np.ndarray:

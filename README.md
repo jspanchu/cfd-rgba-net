@@ -22,12 +22,14 @@ src/cfd_rgba_net/
     io.py                       Zarr v3 case store, vti writer, provenance (git commit, input SHA-256)
     build_case.py               one training case, end to end (CLI: cfd-rgba-net-build-case)
     loader.py                   96^3 training patches from the case stores of one split (PyTorch dataset)
+    baseline.py                 the rules on the grid's own gradients: the baseline, and the net's input features
 tests/                          verification suite (pytest)
 scripts/ahmedml/
     fix_wedges.py               rewrites the AhmedML VTUs with VTK's wedge point order (source of jspanchu/ahmedml)
     figures.py                  progress figures from the ahmedml_run<N>.zarr stores
     make_splits.py              assigns every run to a split (configs/splits/ahmedml_v1.csv)
     compute_scales.py           input scales of the train split, for configs/contract_v1.yaml
+    add_features.py             adds the `features` array to stores built before build_case wrote it
 ```
 
 Input channels (contract v1.0) are `u, v, w` (velocity / U_inf along the mesh's own x, y, z axes), `Cp`,
@@ -57,7 +59,9 @@ cfd-rgba-net-batch --dataset windsorml --runs 0-349 --out /data/cfd-rgba-net-dat
 
 Each case writes one Zarr v3 store, `<dataset>_run<N>.zarr` (64^3 chunks in 256^3 shards, Blosc zstd):
 `inputs` (6, nx, ny, nz) float32 (u, v, w, Cp, body_proximity, ground_proximity), `labels`
-(2, nx, ny, nz) uint8 (vortex, shear_layer) and an `ingredients/` group, with the case config, contract,
+(2, nx, ny, nz) uint8 (vortex, shear_layer), `features` (3, nx, ny, nz) float32 (lambda2*, Q*, |omega|* from
+finite differences of the grid's own u, v, w: the net's inputs) and an `ingredients/` group (the same three
+quantities on the native mesh, which define the labels, and the core), with the case config, contract,
 label rules, geometry, sanity checks, and the git commit and SHA-256 of every input file in the store's
 attributes. `--save-vti` adds `.vti` files for
 viewing. There is no stored fluid mask: take b < 1. It also counts the few voxels outside both the mesh and

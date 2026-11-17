@@ -6,6 +6,7 @@ Build one training case: model inputs, label ingredients and labels on the voxel
 Writes one Zarr v3 store, <out>/<tag>.zarr, with <tag> = <dataset>_run<N>:
     inputs          (6, nx, ny, nz) float32: u, v, w, Cp, body_proximity, ground_proximity
     labels          (2, nx, ny, nz) uint8: vortex, shear_layer
+    features        (3, nx, ny, nz) float32: lambda2*, Q*, |omega|* from the grid's own velocity, the net's inputs
     ingredients/    Q_nd, lambda2_nd, omega_mag_nd (float32), core (bool): teacher only
     attributes      grid, case config, contract, label rules, geometry, checks, provenance
 and, with --save-vti, <tag>_{inputs,ingredients,labels}.vti for viewing.
@@ -102,7 +103,7 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
 
     The steps: read the volume mesh, select and non-dimensionalize its fields, read the body, build the
     voxel grid, compute the label ingredients on the native mesh, resample them to the grid, assemble the
-    input channels, make the labels, and write ``<out>/<dataset>_run<run>.zarr`` (and, with ``save_vti``,
+    input channels, make the labels, compute the net's features on the grid, and write ``<out>/<dataset>_run<run>.zarr`` (and, with ``save_vti``,
     three ``.vti`` files for viewing).
 
     Parameters
@@ -145,6 +146,7 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
     from vtkmodules.vtkCommonCore import vtkSMPTools
 
     from . import io
+    from .baseline import grid_features
     from .config import axis_of
     from .geometry import case_geometry, read_body
     from .ingredients import INGREDIENTS, add_ingredients
@@ -214,6 +216,9 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
     ing = {k: image[k] for k in INGREDIENTS}
     lab = make_labels(ing, inp.fluid, spec, geo, rules, contract.n_per_H)
     step("class fractions over fluid voxels: " + ", ".join(f"{k}={v:.4f}" for k, v in lab.fractions.items()))
+    # the net's inputs, from the stored channels alone, so scripts/ahmedml/add_features.py gives the same array
+    features = grid_features(inp.inputs[:3], inp.inputs[4] < 1, 1 / contract.n_per_H)
+    step("grid features ready")
 
     if save_vti:
         io.save_vti(out / f"{tag}_inputs.vti", spec, {"U_nd": inp.inputs[:3], "Cp": inp.inputs[3],
@@ -248,7 +253,7 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
         runtime_s=time.time() - t0,
     )
     io.save_case_zarr(store_path(cfg, out, run), spec,
-                      arrays=dict(inputs=inp.inputs, labels=lab.labels),
+                      arrays=dict(inputs=inp.inputs, labels=lab.labels, features=features),
                       groups=dict(ingredients={**{k: v.astype("float32") for k, v in ing.items()}, "core": lab.core}),
                       attrs=meta)
     step(f"wrote {tag}.zarr")

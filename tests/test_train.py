@@ -6,20 +6,19 @@ import torch
 from torch import nn
 from torch.utils.data import IterableDataset
 
-from cfd_rgba_net.loss import DeepSupervisionLoss
+from cfd_rgba_net.loss import SegmentationLoss
 from cfd_rgba_net.train import TrainConfig, train
 
 
 class Net(nn.Module):
-    """Stands in for the UNet: full-, half- and quarter-resolution logits in training."""
+    """Stands in for the UNet: 3 features in, 3 class scores out."""
 
     def __init__(self):
         super().__init__()
-        self.conv = nn.Conv3d(6, 3, 1)
+        self.conv = nn.Conv3d(3, 3, 1)
 
     def forward(self, x):
-        out = self.conv(x)
-        return [out, out[:, :, ::2, ::2, ::2], out[:, :, ::4, ::4, ::4]] if self.training else out
+        return self.conv(x)
 
 
 class Patches(IterableDataset):
@@ -27,12 +26,12 @@ class Patches(IterableDataset):
 
     def __iter__(self):
         while True:
-            yield dict(inputs=torch.randn(6, 8, 8, 8), labels=torch.zeros(2, 8, 8, 8, dtype=torch.uint8),
+            yield dict(inputs=torch.randn(3, 8, 8, 8), labels=torch.zeros(2, 8, 8, 8, dtype=torch.uint8),
                        core=torch.ones(8, 8, 8, dtype=torch.bool))
 
 
 def run(cfg, tmp_path, capsys):
-    loss_fn = DeepSupervisionLoss(torch.ones(3))
+    loss_fn = SegmentationLoss(torch.ones(3))
     train(Net(), Patches(), loss_fn, cfg, lambda model: (0.5, 0.5), tmp_path)
     return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
 

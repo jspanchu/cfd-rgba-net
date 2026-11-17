@@ -3,9 +3,7 @@
 import pytest
 import torch
 
-from cfd_rgba_net.loss import DeepSupervisionLoss, class_weights
-
-SHAPES = (8, 4, 2)  # full, half and quarter resolution sides
+from cfd_rgba_net.loss import SegmentationLoss, class_weights
 
 
 def make_batch(labelled=True):
@@ -19,13 +17,12 @@ def make_batch(labelled=True):
 
 def perfect_logits(labels):
     target = (labels[:, 0] + 2 * labels[:, 1]).long()
-    return [torch.nn.functional.one_hot(target[:, ::2**i, ::2**i, ::2**i], 3).movedim(-1, 1) * 50.0
-            for i in range(3)]
+    return torch.nn.functional.one_hot(target, 3).movedim(-1, 1) * 50.0
 
 
 @pytest.fixture
 def loss_fn():
-    return DeepSupervisionLoss(class_weights((0.017, 0.029)))
+    return SegmentationLoss(class_weights((0.017, 0.029)))
 
 
 def test_class_weights_are_capped_inverse_frequencies():
@@ -40,11 +37,9 @@ def test_perfect_prediction_gives_zero_loss(loss_fn):
 
 def test_values_outside_the_core_do_not_change_the_loss(loss_fn):
     labels, core = make_batch()
-    logits = [torch.randn(2, 3, *(s,) * 3) for s in SHAPES]
+    logits = torch.randn(2, 3, 8, 8, 8)
     before = loss_fn(logits, labels, core)[0]
-    for i, x in enumerate(logits):
-        outside = ~core[:, ::2**i, ::2**i, ::2**i]
-        x.permute(0, 2, 3, 4, 1)[outside] = 100.0
+    logits.permute(0, 2, 3, 4, 1)[~core] = 100.0
     labels[:, 0][~core] = 1  # so are the labels (vortex here, never both classes at once)
     labels[:, 1][~core] = 0
     assert loss_fn(logits, labels, core)[0].item() == pytest.approx(before.item())
@@ -52,6 +47,6 @@ def test_values_outside_the_core_do_not_change_the_loss(loss_fn):
 
 def test_gradients_are_finite_without_labelled_voxels(loss_fn):
     labels, core = make_batch(labelled=False)
-    logits = [torch.randn(2, 3, *(s,) * 3, requires_grad=True) for s in SHAPES]
+    logits = torch.randn(2, 3, 8, 8, 8, requires_grad=True)
     loss_fn(logits, labels, core)[0].backward()
-    assert all(torch.isfinite(x.grad).all() for x in logits)
+    assert torch.isfinite(logits.grad).all()

@@ -28,8 +28,8 @@ from .batch import parse_runs, store_path
 from .config import CaseConfig, Contract, LabelRules, configs_dir
 from .io import git_state
 from .label import CLASS_NAMES, core_mask
-from .loader import PATCH, input_scales
-from .model import DerivedFeatures, PlainUNet3D, UNet3D
+from .loader import PATCH
+from .model import UNet3D
 
 STEP = PATCH // 2  # windows overlap by half
 # Zero margin around the case. Without it the grid's low edges, above all the floor, sit on a window's edge, where
@@ -43,7 +43,7 @@ COUNTS = ("inter", "pred", "ref", "surf_match", "surf")
 
 
 @torch.no_grad()
-def predict(model: torch.nn.Module, x: np.ndarray, scale: np.ndarray, device: torch.device) -> torch.Tensor:
+def predict(model: torch.nn.Module, x: np.ndarray, device: torch.device) -> torch.Tensor:
     """Run the net over a whole case with overlapping windows.
 
     The case gets a zero margin of ``PAD`` voxels on every side, and windows are zero-padded where they leave
@@ -56,9 +56,7 @@ def predict(model: torch.nn.Module, x: np.ndarray, scale: np.ndarray, device: to
     model : torch.nn.Module
         The network in eval mode, on ``device``: it returns logits ``(1, 3, D, H, W)``.
     x : numpy.ndarray
-        The unscaled inputs, ``(6, nx, ny, nz)``.
-    scale : numpy.ndarray
-        The per-channel scales that divide the inputs, ``(6,)``.
+        The case's raw ``features``, ``(3, nx, ny, nz)``.
     device : torch.device
         Where the windows run and their predictions are blended. Blending on a GPU takes about 12 bytes per
         voxel of the padded case there, which is about 1 GiB for an AhmedML case; the inputs stay on the CPU.
@@ -71,8 +69,8 @@ def predict(model: torch.nn.Module, x: np.ndarray, scale: np.ndarray, device: to
     dims = x.shape[1:]
     inner = (slice(None),) + tuple(slice(PAD, PAD + n) for n in dims)  # the case within the padded volume
     size = [PATCH + STEP * -(-max(n + 2 * PAD - PATCH, 0) // STEP) for n in dims]  # sides the windows tile exactly
-    xp = torch.zeros(6, *size)
-    xp[inner] = torch.from_numpy(x / scale[:, None, None, None])
+    xp = torch.zeros(x.shape[0], *size)
+    xp[inner] = torch.from_numpy(x)
 
     g = torch.arange(PATCH) - (PATCH - 1) / 2
     g = torch.exp(-g**2 / (2 * (PATCH / 8) ** 2))
@@ -228,7 +226,7 @@ def evaluate_run(
     core = core_mask(x[4] < 1, (1 - x[5]) * contract.ground_proximity_range_H, rules, contract.n_per_H)[1]
     out = {}
     if model is not None:
-        p = predict(model, x, input_scales(contract), device) * torch.from_numpy(core).to(device)  # 0 outside the core
+        p = predict(model, store["features"][:], device) * torch.from_numpy(core).to(device)  # 0 outside the core
         out["net"] = score(p.argmax(0).cpu().numpy(), ref, core, x[4], surface_dice)
         if probs is not None:
             out_store = zarr.open_group(probs, mode="w")
@@ -272,16 +270,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--baseline", action="store_true", help="also score the voxel-grid baseline")
     ap.add_argument("--probs", action="store_true", help="also write each run's probabilities to --out")
     # the checkpoint's architecture, as the pilot's flags of the same names set it
-    ap.add_argument("--arch", default="residual", choices=["residual", "plain"], help="UNet the checkpoint holds")
     ap.add_argument("--levels", type=int, default=5, help="resolution levels of the UNet")
-    ap.add_argument("--inputs", default="all", choices=["all", "features"],
-                    help="'features' gives the net only lambda2, Q and |omega|")
     ap.add_argument("--prior", action="store_true", help="the net adds the rules' margins to its logits")
     args = ap.parse_args(argv)
     if not (args.checkpoint or args.baseline):
         ap.error("give --checkpoint, --baseline or both")
-    if args.prior and args.inputs != "features":
-        ap.error("--prior needs --inputs features")
 
     df = pd.read_csv(args.csv)
     runs = df.run[(df.split == args.split) & df.scored].tolist()
@@ -294,16 +287,12 @@ def main(argv: list[str] | None = None) -> int:
     model = None
     if args.checkpoint:
         # the prior's scales are learned, so they come from the checkpoint, not from a flag
-        features = (DerivedFeatures.from_configs(contract, rules, keep_inputs=False)
-                    if args.inputs == "features" else None)
-        net = PlainUNet3D if args.arch == "plain" else UNet3D
-        model = net(len(contract.channels), args.levels, features=features, prior=args.prior).to(device).eval()
+        model = UNet3D(rules.tau_lambda2, rules.tau_omega, args.levels, prior=args.prior).to(device).eval()
         model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=True))
     meta = dict(**git_state(), split=args.split, csv_sha256=file_sha256(args.csv),
                 checkpoint=str(args.checkpoint) if args.checkpoint else None,
                 checkpoint_sha256=file_sha256(args.checkpoint) if args.checkpoint else None,
-                model=dict(arch=args.arch, levels=args.levels, inputs=args.inputs, prior=args.prior)
-                if args.checkpoint else None)
+                model=dict(levels=args.levels, prior=args.prior) if args.checkpoint else None)
 
     args.out.mkdir(parents=True, exist_ok=True)
     scores = []

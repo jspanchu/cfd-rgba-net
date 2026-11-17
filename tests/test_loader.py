@@ -5,6 +5,7 @@ from itertools import islice
 import numpy as np
 import pytest
 import torch
+import zarr
 from torch.utils.data import DataLoader
 
 from cfd_rgba_net.geometry import ImageSpec
@@ -23,7 +24,9 @@ def write_store(path, rng, n_vortex):
     labels = np.zeros((2, N, N, N), np.uint8)
     for channel, count in enumerate((n_vortex, 60)):
         labels[channel].flat[rng.choice(N**3, count, replace=False)] = 1
-    save_case_zarr(path, ImageSpec((0, 0, 0), 1 / 32, (N, N, N)), {"inputs": inputs, "labels": labels}, {}, {})
+    features = rng.normal(size=(3, N, N, N)).astype(np.float32)
+    save_case_zarr(path, ImageSpec((0, 0, 0), 1 / 32, (N, N, N)),
+                   {"inputs": inputs, "labels": labels, "features": features}, {}, {})
 
 
 @pytest.fixture
@@ -45,6 +48,25 @@ def test_same_seed_gives_the_same_first_100_patches(dataset):
     a, b, other = first_100(7), first_100(7), first_100(8)
     assert all(torch.equal(x[k], y[k]) for x, y in zip(a, b) for k in x)
     assert not torch.equal(a[0]["inputs"], other[0]["inputs"])
+
+
+def test_unaugmented_patch_is_the_stores_features_around_the_centre(tmp_path):
+    rng = np.random.default_rng(1)
+    (tmp_path / "t.yaml").write_text("dataset: T\nfiles: {}\nfields: {velocity: [U], pressure: [p]}\n"
+                                     "field_source: point\nflow: {U_inf: 1.0, nu: 1.0e-5}\n")
+    (tmp_path / "splits.csv").write_text("run,split\n1,train\n")
+    write_store(tmp_path / "t_run1.zarr", rng, n_vortex=30)
+    ds = PatchDataset("train", tmp_path / "splits.csv", tmp_path, tmp_path / "index",
+                      dataset=str(tmp_path / "t.yaml"), augment=False)
+    _, _, centre = ds.sample_centre(np.random.default_rng(5))
+    patch = ds.sample_patch(np.random.default_rng(5))["inputs"].numpy()
+
+    features = zarr.open_group(tmp_path / "t_run1.zarr", mode="r")["features"][:]
+    lo = centre - 48  # the patch is 96 wide and centred on the voxel; the store is smaller, so it is padded
+    src = tuple(slice(max(l, 0), min(l + 96, N)) for l in lo)
+    dst = tuple(slice(s.start - l, s.stop - l) for s, l in zip(src, lo))
+    assert patch.shape == (3, 96, 96, 96)
+    np.testing.assert_array_equal(patch[(slice(None),) + dst], features[(slice(None),) + src])
 
 
 def test_centres_are_a_third_each_and_a_run_without_vortex_gives_its_share_away(dataset):

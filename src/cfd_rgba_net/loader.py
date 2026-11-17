@@ -6,8 +6,8 @@ Patch loader (roadmap, Phase 1.1 task 2): batches of 96^3 training patches from 
         batch["inputs"], batch["labels"], batch["core"]
 
 Each patch is centred on a vortex voxel, a shear-layer voxel or a random fluid voxel, a third of the
-time each, then given one of the 48 axis-aligned orientations. The inputs are divided by the fixed
-scales ``input_scales`` of configs/contract_v1.yaml, which scripts/ahmedml/compute_scales.py computes.
+time each, then given one of the 48 axis-aligned orientations. The net's inputs are the store's
+``features`` (lambda2*, Q* and |omega|* on the grid), raw: the net squashes them itself.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import zarr
 from torch.utils.data import IterableDataset, get_worker_info
 
 from .batch import store_path
-from .config import CaseConfig, Contract, LabelRules, _load, configs_dir
+from .config import CaseConfig, Contract, LabelRules
 from .label import core_mask
 
 PATCH = 96       # voxels per patch side: 3 H at H/32
@@ -137,23 +137,6 @@ def orient(a: np.ndarray, perm: tuple[int, ...], sign: np.ndarray) -> np.ndarray
     return a[(...,) + tuple(slice(None, None, int(s)) for s in sign)]
 
 
-def input_scales(contract: Contract) -> np.ndarray:
-    """Read the scales that divide the input channels, from ``input_scales`` of the contract file.
-
-    Parameters
-    ----------
-    contract : Contract
-        The input contract, which names the channels.
-
-    Returns
-    -------
-    numpy.ndarray
-        Float32, one scale per channel. u, v and w share one: the orientations swap them.
-    """
-    scale = _load(configs_dir() / "contract_v1.yaml")["input_scales"]
-    return np.array([scale["velocity"]] * 3 + [scale[c] for c in contract.channels[3:]], np.float32)
-
-
 class PatchDataset(IterableDataset):
     """An endless stream of training patches from the runs of one split.
 
@@ -202,7 +185,6 @@ class PatchDataset(IterableDataset):
         cfg, self.contract, self.rules = CaseConfig.load(dataset), Contract.load(), LabelRules.load()
         self.stores = {r: store_path(cfg, Path(stores), r) for r in self.runs}
         self.index = {r: load_index(s, r, Path(cache)) for r, s in self.stores.items()}
-        self.scale = input_scales(self.contract)
 
     def sample_centre(self, rng: np.random.Generator) -> tuple[int, str, np.ndarray]:
         """Draw a run, a kind of centre and a voxel.
@@ -236,25 +218,25 @@ class PatchDataset(IterableDataset):
         Returns
         -------
         dict[str, torch.Tensor]
-            ``inputs`` ``(6, 96, 96, 96)`` float32, scaled; ``labels`` ``(2, 96, 96, 96)`` uint8; and
-            ``core`` ``(96, 96, 96)`` bool, where the labels count.
+            ``inputs`` ``(3, 96, 96, 96)`` float32, the store's raw ``features``; ``labels``
+            ``(2, 96, 96, 96)`` uint8; and ``core`` ``(96, 96, 96)`` bool, where the labels count.
         """
         run, _, centre = self.sample_centre(rng)
         store = zarr.open_group(self.stores[run], mode="r")
         # one extra voxel on every side, so the erosion is right at the patch's faces
         lo = centre - PATCH // 2 - 1
-        x, inside = read_crop(store["inputs"], lo, PATCH + 2)
+        x, inside = read_crop(store["inputs"], lo, PATCH + 2)  # only for the core: fluid and height
         labels, _ = read_crop(store["labels"], lo, PATCH + 2)
         h_H = (1 - x[5]) * self.contract.ground_proximity_range_H  # exact where it matters: the floor is below the range
         _, core = core_mask((x[4] < 1) & inside, h_H, self.rules, self.contract.n_per_H)
 
         inner = (...,) + (slice(1, -1),) * 3
-        x, labels, core = x[inner] / self.scale[:, None, None, None], labels[inner], core[inner[1:]]
+        f, _ = read_crop(store["features"], lo + 1, PATCH)
+        labels, core = labels[inner], core[inner[1:]]
+        # the features are invariant under the orientations, so they move with the voxels and nothing else
         perm, sign = ORIENTATIONS[rng.integers(len(ORIENTATIONS)) if self.augment else 0]  # 0 is the identity
-        x = orient(x, perm, sign)
-        x[:3] = x[:3][list(perm)] * sign[:, None, None, None]  # the components follow the axes
-        return {k: torch.from_numpy(np.ascontiguousarray(v)) for k, v in
-                (("inputs", x), ("labels", orient(labels, perm, sign)), ("core", orient(core, perm, sign)))}
+        return {k: torch.from_numpy(np.ascontiguousarray(orient(v, perm, sign))) for k, v in
+                (("inputs", f), ("labels", labels), ("core", core))}
 
     def __iter__(self):
         info = get_worker_info()

@@ -14,6 +14,7 @@ from vtkmodules.vtkFiltersSources import vtkSphereSource
 from vtkmodules.vtkIOGeometry import vtkSTLWriter
 from vtkmodules.vtkIOXML import vtkXMLUnstructuredGridWriter
 
+from cfd_rgba_net.baseline import grid_features
 from cfd_rgba_net.build_case import build_case, read_geo_parameters
 from cfd_rgba_net.config import CaseConfig, Contract, LabelRules
 
@@ -141,13 +142,19 @@ def case(tmp_path_factory):
 def test_store_layout_and_metadata(case):
     store, m = case.store, dict(case.store.attrs)
     assert not (case.out / "synthetic_run1.zarr.tmp").exists()
-    assert set(store.array_keys()) == {"inputs", "labels"}       # no 0/1 body or fluid mask: the body is b > 1
+    assert set(store.array_keys()) == {"inputs", "labels", "features"}  # no 0/1 body or fluid mask: the body is b > 1
     assert store["inputs"].shape[0] == 6 and store["inputs"].dtype == np.float32
     assert store["inputs"].chunks == (6, 64, 64, 64)
     assert m["channel_names"] == ["u", "v", "w", "Cp", "body_proximity", "ground_proximity"]
     assert m["class_names"] == ["vortex", "shear_layer"]
     assert set(store["ingredients"].array_keys()) == {"Q_nd", "lambda2_nd", "omega_mag_nd", "core"}
     assert abs(m["geometry"]["H"] - 0.4) < 1e-3                  # the sphere's diameter
+
+
+def test_features_come_from_the_stored_inputs_alone(case):
+    # what scripts/ahmedml/add_features.py relies on to update stores built before the features existed
+    x = case.store["inputs"][...]
+    np.testing.assert_array_equal(case.store["features"][...], grid_features(x[:3], x[4] < 1, 1 / CONTRACT.n_per_H))
 
 
 def test_provenance_records_versions_and_input_hashes(case):
