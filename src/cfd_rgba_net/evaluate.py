@@ -29,7 +29,7 @@ from .config import CaseConfig, Contract, LabelRules, configs_dir
 from .io import git_state
 from .label import CLASS_NAMES, core_mask
 from .loader import PATCH, input_scales
-from .model import UNet3D
+from .model import DerivedFeatures, PlainUNet3D, UNet3D
 
 STEP = PATCH // 2  # windows overlap by half
 # Zero margin around the case. Without it the grid's low edges, above all the floor, sit on a window's edge, where
@@ -271,9 +271,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--runs", help="score only these runs of the split, as in cfd-rgba-net-batch --runs")
     ap.add_argument("--baseline", action="store_true", help="also score the voxel-grid baseline")
     ap.add_argument("--probs", action="store_true", help="also write each run's probabilities to --out")
+    # the checkpoint's architecture, as the pilot's flags of the same names set it
+    ap.add_argument("--arch", default="residual", choices=["residual", "plain"], help="UNet the checkpoint holds")
+    ap.add_argument("--levels", type=int, default=5, help="resolution levels of the UNet")
+    ap.add_argument("--inputs", default="all", choices=["all", "features"],
+                    help="'features' gives the net only lambda2, Q and |omega|")
+    ap.add_argument("--prior", action="store_true", help="the net adds the rules' margins to its logits")
     args = ap.parse_args(argv)
     if not (args.checkpoint or args.baseline):
         ap.error("give --checkpoint, --baseline or both")
+    if args.prior and args.inputs != "features":
+        ap.error("--prior needs --inputs features")
 
     df = pd.read_csv(args.csv)
     runs = df.run[(df.split == args.split) & df.scored].tolist()
@@ -285,11 +293,17 @@ def main(argv: list[str] | None = None) -> int:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = None
     if args.checkpoint:
-        model = UNet3D(len(contract.channels)).to(device).eval()
+        # the prior's scales are learned, so they come from the checkpoint, not from a flag
+        features = (DerivedFeatures.from_configs(contract, rules, keep_inputs=False)
+                    if args.inputs == "features" else None)
+        net = PlainUNet3D if args.arch == "plain" else UNet3D
+        model = net(len(contract.channels), args.levels, features=features, prior=args.prior).to(device).eval()
         model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=True))
     meta = dict(**git_state(), split=args.split, csv_sha256=file_sha256(args.csv),
                 checkpoint=str(args.checkpoint) if args.checkpoint else None,
-                checkpoint_sha256=file_sha256(args.checkpoint) if args.checkpoint else None)
+                checkpoint_sha256=file_sha256(args.checkpoint) if args.checkpoint else None,
+                model=dict(arch=args.arch, levels=args.levels, inputs=args.inputs, prior=args.prior)
+                if args.checkpoint else None)
 
     args.out.mkdir(parents=True, exist_ok=True)
     scores = []
