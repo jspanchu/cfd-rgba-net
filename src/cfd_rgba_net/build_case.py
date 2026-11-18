@@ -169,7 +169,7 @@ def build_case(
     from . import io
     from .baseline import FEATURE_NAMES, grid_features
     from .config import axis_of
-    from .geometry import case_geometry, read_body
+    from .geometry import read_body
     from .ingredients import INGREDIENTS, add_ingredients
     from .label import CLASS_NAMES, describe, make_labels
     from .preprocess import (
@@ -177,7 +177,7 @@ def build_case(
         assemble_grid,
         prepare_mesh,
         read_volume,
-        resample,
+        resample_case,
     )
 
     # Re_H = U_inf H / nu goes into the metadata, after all the work: fail
@@ -224,39 +224,22 @@ def build_case(
     )
 
     body = read_body(body_path, cfg.body_scale, cfg.body_merge_tolerance)
-    geo = case_geometry(body, prep.ground, cfg.reference_length, up)
-    spec = geo.image_spec(
-        contract, domain, cfg.floor_offset_H, cfg.grid_inset_H
+    probed = resample_case(
+        prep,
+        cfg,
+        contract,
+        body,
+        [U_ND, *INGREDIENTS],
+        ingredients=lambda mesh, h: add_ingredients(
+            mesh, h, cfg.check_vorticity, cfg.check_cp
+        ),
+        max_voxels=max_voxels,
+        log=step,
     )
-    n_vox = spec.dims[0] * spec.dims[1] * spec.dims[2]
-    step(
-        f"H = {geo.H:.6g}, "
-        f"body bounds {tuple(round(b, 6) for b in geo.body_bounds)}, "
-        f"grid {spec.dims} ({n_vox:,} voxels), dx = {spec.dx:.6g}"
-    )
-    if n_vox > max_voxels:
-        raise ValueError(
-            f"the domain gives {n_vox:,} voxels (> {max_voxels:,}); "
-            "set `domain` in the dataset config to the region of interest, "
-            "or raise --max-voxels"
-        )
-
-    checks = add_ingredients(
-        prep.mesh, geo.H, cfg.check_vorticity, cfg.check_cp
-    )
+    image, spec, geo = probed.image, probed.spec, probed.geo
+    checks = probed.ingredient_checks
     step(f"ingredients ready: {checks}")
-
-    # keep only what is resampled: the probe carries every array along
-    keep = {U_ND, *INGREDIENTS}
-    prep.mesh.GetCellData().Initialize()
-    pd = prep.mesh.GetPointData()
-    for name in [pd.GetArrayName(i) for i in range(pd.GetNumberOfArrays())]:
-        if name not in keep:
-            pd.RemoveArray(name)
-    image = resample(prep.mesh, spec, [U_ND, *INGREDIENTS])
-    del (
-        prep.mesh
-    )  # free the mesh; the reference values on prep are still used below
+    # the mesh is freed; the reference values on prep are still used below
     step("resampled to the voxel grid")
 
     grid = assemble_grid(image, body, geo, spec, contract)

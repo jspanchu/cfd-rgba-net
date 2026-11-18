@@ -24,7 +24,7 @@ floor exclusion.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,7 +40,7 @@ from vtkmodules.vtkFiltersCore import vtkCellDataToPointData, vtkResampleToImage
 from vtkmodules.vtkIOXML import vtkXMLUnstructuredGridReader
 
 from .config import FIELD_SOURCES, CaseConfig, Contract, VectorField, axis_of
-from .geometry import CaseGeometry, ImageSpec, signed_distance
+from .geometry import CaseGeometry, ImageSpec, case_geometry, signed_distance
 
 # Array names on the prepared mesh.
 U_ND = "U_nd"  # point data, velocity / U_inf, mesh axes
@@ -448,6 +448,127 @@ def resample(
         valid = valid.view(np.uint8)
     out["valid"] = valid.reshape(spec.dims, order="F") > 0
     return out
+
+
+@dataclass
+class CaseGrid:
+    """The voxel grid of one case and the mesh arrays probed on it.
+
+    Attributes
+    ----------
+    image : dict[str, numpy.ndarray]
+        The output of ``resample``.
+    spec : ImageSpec
+        The voxel grid.
+    geo : CaseGeometry
+        The body and ground geometry.
+    ingredient_checks : dict
+        What the ``ingredients`` callable of ``resample_case`` returned, or
+        ``{}`` without one.
+    """
+
+    image: dict[str, np.ndarray]
+    spec: ImageSpec
+    geo: CaseGeometry
+    ingredient_checks: dict
+
+
+def resample_case(
+    prep: PreparedMesh,
+    cfg: CaseConfig,
+    contract: Contract,
+    body: vtkPolyData | None,
+    names: list[str],
+    H: float | None = None,
+    ingredients: Callable[[vtkUnstructuredGrid, float], dict] | None = None,
+    max_voxels: int | None = None,
+    log: Callable[[str], None] | None = None,
+) -> CaseGrid:
+    """Build the voxel grid of a prepared mesh and probe point arrays on it.
+
+    Parameters
+    ----------
+    prep : PreparedMesh
+        The mesh from ``prepare_mesh``. Its ``mesh`` is modified (see above).
+    cfg : CaseConfig
+        The dataset configuration.
+    contract : Contract
+        The input contract. Supplies ``n_per_H``.
+    body : vtkPolyData or None
+        The closed body surface in mesh units, or ``None`` when the body is a
+        hole in the mesh. Then the grid spans the domain and ``H`` sets the
+        scale.
+    names : list[str]
+        The point arrays to probe. May include the ingredients.
+    H : float or None, optional
+        The reference length, used only without a ``body``.
+        ``cfg.reference_length`` overrides it.
+    ingredients : callable or None, optional
+        Called as ``ingredients(prep.mesh, geo.H)`` once the grid is known, to
+        add the label ingredients to the mesh (see
+        ``ingredients.add_ingredients``). It returns the checks. Not imported
+        here, as ``ingredients`` imports this module.
+    max_voxels : int or None, optional
+        Refuse a grid with more voxels than this, before ``ingredients`` runs.
+    log : callable or None, optional
+        Called with one message (str) once the grid is known.
+
+    Returns
+    -------
+    CaseGrid
+        The probed arrays, the grid, the geometry and the ingredient checks.
+
+    Raises
+    ------
+    ValueError
+        If there is no ``body`` and no H (neither ``H`` nor
+        ``cfg.reference_length``); or if the grid exceeds ``max_voxels``.
+    """
+    up = axis_of(cfg.flow.up_direction, "up direction")
+    domain = cfg.domain or prep.mesh.GetBounds()
+    if body is not None:
+        geo = case_geometry(body, prep.ground, cfg.reference_length, up)
+    else:
+        H = cfg.reference_length or H
+        if H is None:
+            raise ValueError(
+                "without a body, pass H or set reference_length in the "
+                "dataset config"
+            )
+        geo = CaseGeometry(
+            tuple(domain), prep.ground, float(H), up
+        )  # body_bounds is unused by image_spec
+    spec = geo.image_spec(
+        contract, domain, cfg.floor_offset_H, cfg.grid_inset_H
+    )
+    n_vox = spec.dims[0] * spec.dims[1] * spec.dims[2]
+    if log:
+        bounds = (
+            f"body bounds {tuple(round(b, 6) for b in geo.body_bounds)}, "
+            if body is not None
+            else ""
+        )
+        log(
+            f"H = {geo.H:.6g}, {bounds}"
+            f"grid {spec.dims} ({n_vox:,} voxels), dx = {spec.dx:.6g}"
+        )
+    if max_voxels is not None and n_vox > max_voxels:
+        raise ValueError(
+            f"the domain gives {n_vox:,} voxels (> {max_voxels:,}); "
+            "set `domain` in the dataset config to the region of interest, "
+            "or raise --max-voxels"
+        )
+
+    checks = ingredients(prep.mesh, geo.H) if ingredients else {}
+
+    prep.mesh.GetCellData().Initialize()
+    pd = prep.mesh.GetPointData()
+    for name in [pd.GetArrayName(i) for i in range(pd.GetNumberOfArrays())]:
+        if name not in names:
+            pd.RemoveArray(name)
+    image = resample(prep.mesh, spec, names)
+    del prep.mesh
+    return CaseGrid(image, spec, geo, checks)
 
 
 @dataclass

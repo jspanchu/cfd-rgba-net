@@ -39,95 +39,11 @@ from .baseline import (
     lambda2_closed_form,
     q_and_vorticity,
 )
-from .config import CaseConfig, Contract, LabelRules, axis_of
-from .geometry import CaseGeometry, ImageSpec, body_inside, case_geometry
+from .config import CaseConfig, Contract, LabelRules
+from .geometry import ImageSpec, body_inside
 from .ingredients import add_ingredients
 from .label import core_mask
-from .preprocess import U_ND, prepare_mesh, resample
-
-
-def _resampled(
-    ug: vtkUnstructuredGrid,
-    cfg: CaseConfig,
-    contract: Contract,
-    body: vtkPolyData | None,
-    H: float | None,
-    names: list[str],
-    criteria=None,
-) -> tuple[dict, ImageSpec, CaseGeometry, np.ndarray]:
-    """Prepare the mesh, build the voxel grid and probe point arrays on it.
-
-    Parameters
-    ----------
-    ug : vtkUnstructuredGrid
-        The raw volume mesh, with the arrays that ``cfg`` names. Left unchanged.
-    cfg : CaseConfig
-        The dataset configuration.
-    contract : Contract
-        The input contract. Supplies ``n_per_H``.
-    body : vtkPolyData or None
-        The closed body surface, or ``None`` when the body is a hole in the
-        mesh.
-    H : float or None
-        The reference length, used only without a ``body``.
-    names : list[str]
-        The point arrays to probe.
-    criteria : callable or None, optional
-        When given, the label ingredients are added on the native mesh first,
-        with these criteria (see ``ingredients.add_ingredients``), and may be
-        among ``names``.
-
-    Returns
-    -------
-    image : dict[str, numpy.ndarray]
-        The output of ``preprocess.resample``.
-    spec : ImageSpec
-        The voxel grid.
-    geo : CaseGeometry
-        The body and ground geometry.
-    inside : numpy.ndarray
-        Bool ``(nx, ny, nz)``: the voxels inside the body.
-
-    Raises
-    ------
-    ValueError
-        If there is no ``body`` and no H (neither ``H`` nor
-        ``cfg.reference_length``).
-    """
-    prep = prepare_mesh(ug, cfg)
-    up = axis_of(cfg.flow.up_direction, "up direction")
-    domain = cfg.domain or prep.mesh.GetBounds()
-    if body is not None:
-        geo = case_geometry(body, prep.ground, cfg.reference_length, up)
-    else:
-        H = cfg.reference_length or H
-        if H is None:
-            raise ValueError(
-                "without a body, pass H or set reference_length in the "
-                "dataset config"
-            )
-        geo = CaseGeometry(
-            tuple(domain), prep.ground, float(H), up
-        )  # body_bounds is unused by image_spec
-    spec = geo.image_spec(
-        contract, domain, cfg.floor_offset_H, cfg.grid_inset_H
-    )
-    if criteria is not None:
-        add_ingredients(prep.mesh, geo.H, criteria=criteria)
-
-    # probe only what is needed: drop the rest, the probe carries every array
-    # along
-    prep.mesh.GetCellData().Initialize()
-    pd = prep.mesh.GetPointData()
-    for name in [pd.GetArrayName(i) for i in range(pd.GetNumberOfArrays())]:
-        if name not in names:
-            pd.RemoveArray(name)
-    image = resample(prep.mesh, spec, names)
-    del prep.mesh
-    # without the surface, the body is the hole in the mesh: no cell holds its
-    # voxels
-    inside = body_inside(body, spec) if body is not None else ~image["valid"]
-    return image, spec, geo, inside
+from .preprocess import U_ND, prepare_mesh, resample_case
 
 
 def case_features(
@@ -175,7 +91,20 @@ def case_features(
         (``label.core_mask``). The net was trained and scored there only, so its
         probabilities elsewhere, near walls and the floor, mean nothing.
     """
-    image, spec, geo, inside = _resampled(ug, cfg, contract, body, H, [U_ND])
+    prep = prepare_mesh(ug, cfg)
+    grid = resample_case(
+        prep,
+        cfg,
+        contract,
+        body,
+        names=[U_ND],
+        H=H,
+        ingredients=None,
+    )
+    image, spec, geo = grid.image, grid.spec, grid.geo
+    # without the surface, the body is the hole in the mesh: no cell holds its
+    # voxels
+    inside = body_inside(body, spec) if body is not None else ~image["valid"]
     u = image[U_ND].astype(np.float32)
     u[:, ~image["valid"] | inside] = 0.0
     # the gradient mask is "not inside the body", as in build_case, not "fluid"
@@ -252,9 +181,20 @@ def case_ingredients(
         fluid mask of ``build_case``.
     """
     names = ["lambda2_nd", "Q_nd", "omega_mag_nd"]
-    image, spec, geo, inside = _resampled(
-        ug, cfg, contract, body, H, names, criteria=_gpu_criteria
+    prep = prepare_mesh(ug, cfg)
+    grid = resample_case(
+        prep,
+        cfg,
+        contract,
+        body,
+        names=names,
+        H=H,
+        ingredients=(
+            lambda mesh, h: add_ingredients(mesh, h, criteria=_gpu_criteria)
+        ),
     )
+    image, spec, geo = grid.image, grid.spec, grid.geo
+    inside = body_inside(body, spec) if body is not None else ~image["valid"]
     fluid = image["valid"] & ~inside
     core = core_mask(
         fluid, geo.height_above_ground(spec) / geo.H, rules, contract.n_per_H
