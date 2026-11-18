@@ -23,6 +23,8 @@ src/cfd_rgba_net/
     build_case.py               one training case, end to end (CLI: cfd-rgba-net-build-case)
     loader.py                   96^3 training patches from the case stores of one split (PyTorch dataset)
     baseline.py                 the rules on the grid's own gradients: the baseline, and the net's input features
+    infer.py                    unseen case, end to end: raw mesh -> features -> probabilities -> renders (CLI: cfd-rgba-net-infer)
+    render.py                   GPU volume rendering of the probabilities, one colour per feature (CLI: cfd-rgba-net-render)
 tests/                          verification suite (pytest)
 scripts/ahmedml/
     fix_wedges.py               rewrites the AhmedML VTUs with VTK's wedge point order (source of jspanchu/ahmedml)
@@ -69,6 +71,37 @@ the body (`checks.voxels.n_not_in_mesh_nor_body`, at most 84 per AhmedML case), 
 and the labels are 0.
 
 The WindsorML and DrivAerML configs are not yet verified on downloaded cases; see the TODOs in them.
+
+## Inference on an unseen case
+
+From a raw AhmedML-family volume to volume renderings of the vortex and shear-layer classes, one command per
+method; each reads the .vtu and writes `<out>_<view>.png` only:
+
+```sh
+# get a case (here test_interp run 280)
+hf download jspanchu/ahmedml run_280/volume_280.vtu run_280/ahmed_280.stl --repo-type dataset --local-dir data
+
+common="data/run_280/volume_280.vtu --body data/run_280/ahmed_280.stl --dataset configs/datasets/ahmedml.yaml
+        --contract configs/contract_v1.yaml --rules configs/label_rules_v1.yaml --views side top rear"
+cfd-rgba-net-infer $common --method net --checkpoint runs/case_feat_prior_100/best.pt --out out/run280_net
+cfd-rgba-net-infer $common --method baseline --out out/run280_baseline  # the rules on the grid's gradients
+cfd-rgba-net-infer $common --method labels --out out/run280_labels      # the rules on the native mesh's gradients
+```
+
+`net` and `baseline` resample the velocity and take finite differences on the grid; `labels` takes the
+gradient on the native mesh (vtkGradientFilter), as `build_case` does, and resamples the ingredients. All three
+compute Q, |omega| and lambda2 in torch, on the GPU when there is one, with a closed-form lambda2, so `labels`
+may differ from the stored labels by round-off at the thresholds. U_inf, the ground, the domain and the field
+names come from the dataset config, and H from the body STL. Without `--body`, pass `--H` (mesh units); the
+body is then the hole in the mesh. The classes are 0 outside the core (walls and the floor boundary layer),
+where the net was neither trained nor scored. Rendering is offscreen through EGL, so no display is needed;
+colours and opacity curves come from `--render-config` (copy `configs/render_default.yaml`).
+`cfd-rgba-net-render` re-renders a .vti with `vortex` and `shear_layer` arrays, such as `build_case --save-vti`'s
+labels.
+
+On one AhmedML case (20 M cells, a 1077 x 216 x 151 grid; 40 cores, one RTX A5000), end to end with three
+views: `net` 33 s and 5 GB of RAM (16 s features, 9 s net), `baseline` 24 s and 5 GB, `labels` 30 s and 6 GB
+(22 s for the native gradient, criteria and resampling). Reading the .vtu takes 2 s and rendering about 1 s.
 
 ## Tests
 

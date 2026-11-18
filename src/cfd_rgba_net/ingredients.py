@@ -5,6 +5,8 @@ Label ingredients on the native mesh (teacher only, never model inputs):
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 from scipy.stats import spearmanr
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
@@ -74,6 +76,7 @@ def add_ingredients(
     H: float,
     dataset_vorticity: str | None = None,
     dataset_cp: str | None = None,
+    criteria: Callable[[np.ndarray], tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None,
 ) -> dict:
     """Add the label ingredients to a prepared mesh.
 
@@ -95,6 +98,9 @@ def add_ingredients(
     dataset_cp : str or None, optional
         Name of the dataset's own pressure-coefficient array in the point data. When given and present,
         the checks report its largest difference from ``Cp``. A cell-only mesh never has it there.
+    criteria : callable or None, optional
+        Maps the gradients ``(N, 3, 3)`` to float32 ``(Q, omega, lambda2)``, each ``(N,)``. ``None`` uses
+        ``q_and_vorticity`` and ``lambda2``, which define the labels; ``infer`` passes a faster one.
 
     Returns
     -------
@@ -120,8 +126,11 @@ def add_ingredients(
     G = (vtk_to_numpy(gdata.GetArray("gradU")).reshape(-1, 3, 3) * H).astype(np.float32)
     bad = ~np.isfinite(G).all(axis=(1, 2))
     G[bad] = 0.0
-    Q, omega = q_and_vorticity(G)
-    lam2 = lambda2(G)
+    if criteria is None:
+        Q, omega = q_and_vorticity(G)
+        lam2 = lambda2(G)
+    else:
+        Q, omega, lam2 = criteria(G)
     del G
     checks: dict = {"gradient_of": "cell U" if use_cell else "point U", "n_nonfinite_gradient": int(bad.sum())}
 

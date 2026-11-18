@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 
+from cfd_rgba_net.infer import _gpu_criteria
 from cfd_rgba_net.ingredients import add_ingredients, lambda2, q_and_vorticity
 from cfd_rgba_net.preprocess import prepare_mesh
 
@@ -32,23 +33,25 @@ def test_closed_forms():
     np.testing.assert_allclose(l2, [-W**2, 0.0], atol=1e-6)
 
 
+@pytest.mark.parametrize("criteria", [None, _gpu_criteria], ids=["labels", "infer"])
 @pytest.mark.parametrize("tets", [True, False], ids=["tets", "hexes"])
 @pytest.mark.parametrize("both", [True, False], ids=["cell+point U", "point U only"])
 @pytest.mark.parametrize("field,Q,omega,lam2", [
     (ROTATION, W**2, 2 * W, -W**2),
     (SHEAR, 0.0, GAMMA, 0.0),
 ], ids=["solid-body rotation", "pure shear"])
-def test_linear_fields_exact(flow_cfg, tets, both, field, Q, omega, lam2):
+def test_linear_fields_exact(flow_cfg, criteria, tets, both, field, Q, omega, lam2):
     """
     Point-U gradients are exact everywhere. Cell-U gradients (vtkGradientFilter on cell data, the
     path for OpenFOAM data) are exact except in the cell layer touching the mesh boundary, so after
     averaging to the points they are exact at points 2 cells or more from the boundary. Near walls
-    that layer is far thinner than a voxel and is removed by the label rules' wall erosion.
+    that layer is far thinner than a voxel and is removed by the label rules' wall erosion. The same holds
+    for the torch criteria that ``cfd-rgba-net-infer --method labels`` uses.
     """
     ug = box_mesh(tets=tets)
     set_linear_velocity(ug, field, both=both)
     prep = prepare_mesh(ug, flow_cfg())
-    checks = add_ingredients(prep.mesh, 1.0)
+    checks = add_ingredients(prep.mesh, 1.0, criteria=criteria)
     assert checks["gradient_of"] == ("cell U" if both else "point U")      # U_cell is present iff the mesh has cell U
     sel = interior(ug, 2) if both else slice(None)
     np.testing.assert_allclose(arr(prep.mesh, "Q_nd")[sel], Q, atol=1e-5)
