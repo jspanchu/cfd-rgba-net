@@ -170,7 +170,7 @@ def build_case(
     from .baseline import FEATURE_NAMES, grid_features
     from .config import axis_of
     from .geometry import read_body
-    from .ingredients import INGREDIENTS, add_ingredients
+    from .ingredients import INGREDIENTS, add_ingredients, gpu_criteria
     from .label import CLASS_NAMES, describe, make_labels
     from .preprocess import (
         U_ND,
@@ -231,7 +231,7 @@ def build_case(
         body,
         [U_ND, *INGREDIENTS],
         ingredients=lambda mesh, h: add_ingredients(
-            mesh, h, cfg.check_vorticity, cfg.check_cp
+            mesh, h, cfg.check_vorticity, cfg.check_cp, criteria=gpu_criteria
         ),
         max_voxels=max_voxels,
         log=step,

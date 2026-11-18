@@ -9,12 +9,15 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
+import torch
 from scipy.stats import spearmanr
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 from vtkmodules.vtkCommonDataModel import vtkDataObject, vtkUnstructuredGrid
 from vtkmodules.vtkFiltersCore import vtkCellDataToPointData
 from vtkmodules.vtkFiltersGeneral import vtkGradientFilter
 
+from .baseline import default_device, lambda2_closed_form
+from .baseline import q_and_vorticity as q_and_vorticity_torch
 from .preprocess import CP, U_CELL, U_ND
 
 INGREDIENTS = ("Q_nd", "lambda2_nd", "omega_mag_nd")
@@ -84,6 +87,30 @@ def q_and_vorticity(G: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         1,
     )
     return Q.astype(np.float32), np.linalg.norm(w, axis=1).astype(np.float32)
+
+
+def gpu_criteria(G: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute Q*, |omega|* and lambda2* of native-mesh gradients in torch.
+
+    The eigenvalue comes from ``lambda2_closed_form``.
+
+    Parameters
+    ----------
+    G : numpy.ndarray
+        Float32 velocity gradients ``(N, 3, 3)``.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]
+        Float32 ``(N,)`` each: Q*, |omega|* and lambda2*.
+    """
+    g = torch.from_numpy(G).to(default_device())
+    Q, omega = q_and_vorticity_torch(g)
+    return (
+        Q.cpu().numpy(),
+        omega.cpu().numpy(),
+        lambda2_closed_form(g).cpu().numpy(),
+    )
 
 
 def add_ingredients(

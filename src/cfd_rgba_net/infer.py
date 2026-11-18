@@ -33,15 +33,10 @@ import numpy as np
 import torch
 from vtkmodules.vtkCommonDataModel import vtkPolyData, vtkUnstructuredGrid
 
-from .baseline import (
-    default_device,
-    grid_features,
-    lambda2_closed_form,
-    q_and_vorticity,
-)
+from .baseline import default_device, grid_features
 from .config import CaseConfig, Contract, LabelRules
 from .geometry import ImageSpec, body_inside
-from .ingredients import add_ingredients
+from .ingredients import add_ingredients, gpu_criteria
 from .label import core_mask
 from .preprocess import U_ND, prepare_mesh, resample_case
 
@@ -115,30 +110,6 @@ def case_features(
     return torch.from_numpy(features), spec, torch.from_numpy(core)
 
 
-def _gpu_criteria(G: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute Q*, |omega|* and lambda2* of native-mesh gradients in torch.
-
-    The eigenvalue comes from ``lambda2_closed_form``.
-
-    Parameters
-    ----------
-    G : numpy.ndarray
-        Float32 velocity gradients ``(N, 3, 3)``.
-
-    Returns
-    -------
-    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]
-        Float32 ``(N,)`` each: Q*, |omega|* and lambda2*.
-    """
-    g = torch.from_numpy(G).to(default_device())
-    Q, omega = q_and_vorticity(g)
-    return (
-        Q.cpu().numpy(),
-        omega.cpu().numpy(),
-        lambda2_closed_form(g).cpu().numpy(),
-    )
-
-
 def case_ingredients(
     ug: vtkUnstructuredGrid,
     cfg: CaseConfig,
@@ -190,7 +161,7 @@ def case_ingredients(
         names=names,
         H=H,
         ingredients=(
-            lambda mesh, h: add_ingredients(mesh, h, criteria=_gpu_criteria)
+            lambda mesh, h: add_ingredients(mesh, h, criteria=gpu_criteria)
         ),
     )
     image, spec, geo = grid.image, grid.spec, grid.geo

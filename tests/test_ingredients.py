@@ -9,8 +9,7 @@ import pytest
 from helpers import box_mesh, interior, set_linear_velocity
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 
-from cfd_rgba_net.infer import _gpu_criteria
-from cfd_rgba_net.ingredients import add_ingredients
+from cfd_rgba_net.ingredients import add_ingredients, gpu_criteria
 from cfd_rgba_net.preprocess import prepare_mesh
 
 
@@ -31,8 +30,8 @@ SHEAR = [[0, GAMMA, 0], [0, 0, 0], [0, 0, 0]]  # u = (GAMMA y, 0, 0)
         # cell+point U vs point U only, rotation vs shear) appears
         (None, True, True, ROTATION, W**2, 2 * W, -(W**2)),
         (None, False, False, SHEAR, 0.0, GAMMA, 0.0),
-        (_gpu_criteria, True, False, ROTATION, W**2, 2 * W, -(W**2)),
-        (_gpu_criteria, False, True, SHEAR, 0.0, GAMMA, 0.0),
+        (gpu_criteria, True, False, ROTATION, W**2, 2 * W, -(W**2)),
+        (gpu_criteria, False, True, SHEAR, 0.0, GAMMA, 0.0),
     ],
     ids=[
         "labels-tets-cell+point-rotation",
