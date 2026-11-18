@@ -61,7 +61,9 @@ viewing. There is no stored fluid mask: take `body_sdf > 0`. The attributes also
 both the mesh and the body (`checks.voxels.n_not_in_mesh_nor_body`, at most 84 per AhmedML case), where the
 features and the labels are 0.
 
-The WindsorML and DrivAerML configs are not yet verified on downloaded cases; see the TODOs in them.
+The WindsorML config is not yet verified on a downloaded case; see the TODOs in it. The DrivAerML config is
+verified on run 1: its comments record what was checked and how the run's volume was prepared (concatenated
+parts, rewritten in appended binary, wedges fixed with `fix_wedges.convert`).
 
 ## Inference on an unseen case
 
@@ -93,6 +95,19 @@ labels.
 On one AhmedML case (20 M cells, a 1077 x 216 x 151 grid; 40 cores, one RTX A5000), end to end with three
 views: `net` 33 s and 5 GB of RAM (16 s features, 9 s net), `baseline` 24 s and 5 GB, `labels` 30 s and 6 GB
 (22 s for the native gradient, criteria and resampling). Reading the .vtu takes 2 s and rendering about 1 s.
+
+On DrivAerML run 1 (147 M cells, a 1088 x 216 x 151 grid, the same box as AhmedML's in units of H), the net
+trained on AhmedML alone runs unchanged: `net` 3.4 min and 29 GB, `baseline` 3.1 min and 29 GB, `labels`
+4.3 min and 36 GB. Its known limitations there, judged by eye against `labels` and not yet scored:
+
+- A vortex disc floats above the roof in `net` and `baseline` but not in `labels`, so it comes from the grid
+  features (resampling or finite differences on the grid), which the net cannot correct.
+- At tau_lambda2 = 0.5 only the strongest vortices are labelled (0.026 % of the core against 0.33 % on
+  AhmedML): A-pillar, mirrors and one trailing vortex. No single threshold suits both datasets; see
+  `docs/lambda2-threshold-tuning/`.
+- The thresholds and n_per_H are fixed by the checkpoint; they cannot be chosen at inference.
+- One case of one dataset; the trailing wake is asymmetric in all three methods and should be checked on
+  more runs.
 
 ## Tests
 

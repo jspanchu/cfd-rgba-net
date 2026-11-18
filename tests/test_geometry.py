@@ -115,6 +115,13 @@ def test_case_geometry_rejects_body_below_ground(cube_body):
         case_geometry(cube_body, ground=0.1, reference_length=None, up=Axis(2, 1))
 
 
+def test_case_geometry_accepts_body_slightly_sunk_into_ground(cube_body):
+    # bottom 2 mm (0.0067 H) below the ground, like DrivAerML's tyre contact patches; H stays the body height
+    geo = case_geometry(cube_body, ground=0.052, reference_length=None, up=Axis(2, 1))
+    assert geo.ground == 0.052
+    assert geo.H == pytest.approx(0.3)
+
+
 def test_stl_near_duplicate_vertices_are_merged(tmp_path):
     """Each triangle has its own copy of its vertices, jittered by ~1e-7 of the size (as in WindsorML)."""
     src = vtkSphereSource(radius=0.5, theta_resolution=32, phi_resolution=32)

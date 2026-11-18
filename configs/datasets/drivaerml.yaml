@@ -1,37 +1,50 @@
 dataset: DrivAerML
 hf_repo: neashton/drivaerml
 
-# NOT YET VERIFIED on a downloaded case. On Hugging Face, volume_{run}.vtu is split into
-# volume_{run}.vtu.00.part and .01.part (concatenate them). ~147M cells, OpenFOAM v2212, so its
-# wedges probably need the same point-order fix as AhmedML (scripts/ahmedml/fix_wedges.py).
+# Verified on run 1. On Hugging Face, volume_{run}.vtu is split into volume_{run}.vtu.00.part and .01.part
+# (concatenate them): 147M cells (139.8M hexahedra, 6.3M polyhedra, 1.3M wedges, a few pyramids and
+# tetrahedra), OpenFOAM v2212, 49 GB of inline base64 that takes ~10 min to read. Rewritten in appended raw
+# binary with LZ4 (as scripts/ahmedml/fix_wedges.py writes), it is 35 GB and reads in ~20 s.
+# Every wedge is inside out, as in AhmedML (1,324,673 of 1,324,673 on run 1). fix_wedges.convert flips
+# them and writes the appended LZ4 file; run 1 is fixed (volume_1.fixed.json: shared same-wound faces
+# 2,946,890 -> 0; 538 near-flat wedges fail vtkCellValidator in both orders and are kept; 6 hexahedra test
+# inside out and are left as they are).
 files:
   volume: run_{run}/volume_{run}.vtu
   body: run_{run}/drivaer_{run}.stl
   geo_parameters: run_{run}/geo_parameters_{run}.csv
 
+# The arrays are time averages over the transient-free window, hence "Trim".
 fields:
-  velocity: [UMean, U]
-  pressure: [pMean, p]
-field_source: cell                 # TODO verify against a downloaded case (OpenFOAM stores cell-centred values); no fallback to points
+  velocity: [UMeanTrim]
+  pressure: [pMeanTrim]
+field_source: cell                 # the solver's cell values; the point arrays (same names) are interpolated from them
 
 # Arrays the dataset carries that the label ingredients are checked against (sanity checks only; optional).
-check_fields:                      # TODO verify the names on a downloaded case
-  vorticity: vorticityMean         # cell array, dimensional vorticity vector
-  cp: static(p)_coeffMean          # point array, pressure coefficient
+# There is no vorticity array, so the vorticity check is off.
+check_fields:
+  cp: CpMeanTrim                   # pressure coefficient, (p - 0) / (0.5 U_inf^2)
 
+# From the DrivAerML paper (U_inf, nu, kinematic pressure, p_ref = 0 at the outlet, x = 80 m, y = z = 10 m)
+# and checked on run 1: |UMeanTrim| / magUMeanNormTrim = 38.889 and pMeanTrim = 756.18 CpMeanTrim + 0
+# (0.5 rho U_inf^2 with rho = 1) on every cell sampled.
 flow:
-  U_inf: 38.889                    # TODO verify against the DrivAerML paper (140 km/h)
+  U_inf: 38.889                    # 140 km/h
   p_inf: 0.0
-  rho: 1.0                         # TODO verify kinematic pressure
-  nu: 1.507e-5                     # TODO verify
+  rho: 1.0                         # kinematic pressure (m^2/s^2)
+  nu: 1.507e-5                     # Re = 7.19e6 on the 2.786 m wheelbase
   up_direction: [0, 0, 1]
-  ground: auto
+  ground: auto                     # the floor is flat at the mesh's lowest z (-0.317597 m on run 1)
 
-# domain: TODO a region around the car; the open-road domain at H/32 is likely too large.
-floor_offset_H: 1.0e-6             # TODO verify; first voxel layer above the ground (units of H)
-grid_inset_H: 1.0e-6               # TODO verify; voxels stay this far inside the domain's side faces (units of H)
+# The CFD domain is x -40..80, y -22..22, z -0.3176..19.68 m (DrivAerML paper, appendix C, Fig. 11; the
+# mesh bounds of run 1), about 1.2 G voxels at H/32. This box is AhmedML's domain in units of H, around
+# run 1's car (x -0.765..3.939, H = 1.515 m): 10.7 H upstream of the nose, 20.2 H downstream of the tail,
+# 3.36 H to either side and 4.71 H above the ground, about 1087 x 215 x 151 voxels.
+domain: [-16.96, 34.51, -5.10, 5.10, -0.317597, 6.815]
+floor_offset_H: 1.0e-6             # first voxel layer above the ground (units of H); on run 1, 5 of its 233,705 voxels lie in no mesh cell, all at the tyre contact patches
+grid_inset_H: 1.0e-6               # voxels stay this far inside the domain's side faces (units of H); unused while the box lies inside the mesh
 
 body:
-  scale: 1.0                       # TODO verify STL units (the STEP is in millimetres)
-  merge_tolerance: 1.0e-5          # TODO verify; merge STL vertices closer than this fraction of the bounding-box diagonal
-  reference_length: height         # includes the wheels down to the ground
+  scale: 1.0                       # the STL is in metres, like the mesh (run 1: 4.70 m long, 1.51 m high)
+  merge_tolerance: 1.0e-5          # the STL is already closed (no open or non-manifold edges on run 1); the merge drops 38 degenerate triangles
+  reference_length: height         # includes the wheels; their contact patches sink 2 mm (0.0013 H) below the ground

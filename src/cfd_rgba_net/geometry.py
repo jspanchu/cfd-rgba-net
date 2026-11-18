@@ -255,7 +255,7 @@ def case_geometry(body: vtkPolyData, ground: float, reference_length: float | No
     Raises
     ------
     ValueError
-        If H is not positive, or the body reaches below the ground.
+        If H is not positive, or the body reaches more than 0.01 H below the ground.
     """
     b = body.GetBounds()
     j = up.index
@@ -264,8 +264,10 @@ def case_geometry(body: vtkPolyData, ground: float, reference_length: float | No
     H = reference_length if reference_length is not None else highest - lowest
     if not H > 0:
         raise ValueError(f"reference length H must be > 0, got {H}")
-    # a body that touches the ground (wheels) is fine; the 1e-6 H slack absorbs round-off
-    if lowest < up.sign * ground - 1e-6 * H:
+    # a body that touches the ground (wheels) is fine, and so is one slightly sunk into it: DrivAerML sinks
+    # the tyre contact patches 2 mm (0.0013 H) into the floor so that it can be meshed. The grid starts
+    # above the ground, so the sunk part is never voxelised.
+    if lowest < up.sign * ground - 0.01 * H:
         raise ValueError(f"body reaches below the ground along {up}: body {b}, ground {ground}")
     return CaseGeometry(tuple(b), float(ground), float(H), up)  # type: ignore[arg-type]
 
