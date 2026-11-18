@@ -106,7 +106,7 @@ trained on AhmedML alone runs unchanged: `net` 3.4 min and 29 GB, `baseline` 3.1
   features (resampling or finite differences on the grid), which the net cannot correct.
 - At tau_lambda2 = 0.5 only the strongest vortices are labelled (0.026 % of the core against 0.33 % on
   AhmedML): A-pillar, mirrors and one trailing vortex. No single threshold suits both datasets; see
-  `docs/lambda2-threshold-tuning/`.
+  "DrivAerML transfer" in the project roadmap (https://claude.ai/artifact/R8BnfgG8SZRQEH1j5iFB1H).
 - The thresholds and n_per_H are fixed by the checkpoint; they cannot be chosen at inference.
 - One case of one dataset; the trailing wake is asymmetric in all three methods and should be checked on
   more runs.
