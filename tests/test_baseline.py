@@ -1,9 +1,11 @@
 """Verification: the net's grid features carry the baseline's rules and do not depend on the grid's orientation."""
 
 import numpy as np
+import torch
 
-from cfd_rgba_net.baseline import baseline_classes, grid_features
+from cfd_rgba_net.baseline import baseline_classes, grid_features, lambda2_closed_form
 from cfd_rgba_net.config import Contract, LabelRules
+from cfd_rgba_net.ingredients import lambda2
 
 H = 1 / 32
 
@@ -40,3 +42,11 @@ def test_features_are_invariant_under_orientation():
     rot[[0, 1]] = np.stack([-rot[1], rot[0]])
     np.testing.assert_allclose(grid_features(rot[:3], rot[4] < 1, H),
                                np.rot90(grid_features(x[:3], x[4] < 1, H), 1, axes=(1, 2)), atol=1e-4)
+
+
+def test_closed_form_lambda2_matches_the_labels_eigenvalue_solver():
+    G = np.random.default_rng(0).normal(size=(10_000, 3, 3)).astype(np.float32) * 5
+    G[0] = 0  # three equal eigenvalues
+    G[1] = [[0, -1, 0], [1, 0, 0], [0, 0, 0]]  # pure rotation: a repeated eigenvalue
+    G[2] = [[0, 1, 0], [0, 0, 0], [0, 0, 0]]  # pure shear: lambda2 = 0
+    np.testing.assert_allclose(lambda2_closed_form(torch.from_numpy(G)).numpy(), lambda2(G), rtol=1e-5, atol=1e-5)
