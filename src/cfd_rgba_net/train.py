@@ -16,6 +16,8 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
+from .loader import PatchDataset
+
 
 @dataclass
 class TrainConfig:
@@ -55,7 +57,7 @@ def seed_everything(seed: int) -> None:
 
 def train(
     model: nn.Module,
-    dataset: torch.utils.data.IterableDataset,
+    dataset: PatchDataset,
     loss_fn: Callable,
     cfg: TrainConfig,
     validate: Callable[[nn.Module], tuple[float, float]],
@@ -71,7 +73,7 @@ def train(
     ----------
     model : torch.nn.Module
         The network, already on its device.
-    dataset : torch.utils.data.IterableDataset
+    dataset : cfd_rgba_net.loader.PatchDataset
         Yields patches with ``inputs``, ``labels`` and ``core``. Its ``seed`` is
         set to ``cfg.seed + rank``, so that ranks draw different patches.
     loss_fn : callable

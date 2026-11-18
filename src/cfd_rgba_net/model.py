@@ -167,6 +167,7 @@ class UNet3D(nn.Module):
         self.head = nn.Conv3d(c[0], N_CLASSES, 1)
         if prior:
             nn.init.zeros_(self.head.weight)
+            assert self.head.bias is not None  # Conv3d has a bias by default
             nn.init.zeros_(self.head.bias)
 
     def squash(self, x: torch.Tensor) -> torch.Tensor:
@@ -226,5 +227,6 @@ class UNet3D(nn.Module):
             y = dec(torch.cat([up(y), skip], dim=1))
         out = self.head(y)
         if self.prior:
+            assert self.prior_scale is not None  # set whenever prior is
             out = out + rule_logits(f, self.prior_scale)
         return out

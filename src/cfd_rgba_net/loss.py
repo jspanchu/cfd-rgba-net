@@ -42,6 +42,8 @@ class SegmentationLoss(nn.Module):
         Smoothing term of the Dice ratio.
     """
 
+    weights: torch.Tensor  # registered as a buffer in __init__
+
     def __init__(self, weights: torch.Tensor, eps: float = 1e-5):
         super().__init__()
         self.register_buffer("weights", weights)

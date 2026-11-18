@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import yaml
@@ -170,12 +170,11 @@ class LabelRules:
             If the file misses a field or holds an unknown one.
         """
         d = _load(path or configs_dir() / "label_rules_v1.yaml")
-        r = cls(
-            **{
-                k: (str(v) if k == "label_rules_version" else float(v))
-                for k, v in d.items()
-            }
-        )
+        fields: dict[str, Any] = {
+            k: (str(v) if k == "label_rules_version" else float(v))
+            for k, v in d.items()
+        }
+        r = cls(**fields)
         if r.label_rules_version != LABEL_RULES_VERSION:
             raise ValueError(
                 f"label rules file is v{r.label_rules_version}, "
@@ -537,20 +536,28 @@ class CaseConfig:
                 p_inf=None if probe is not None else float(f.get("p_inf", 0.0)),
                 rho=float(f.get("rho", 1.0)),
                 nu=float(f["nu"]),
-                up_direction=tuple(
-                    float(x) for x in f.get("up_direction", (0, 0, 1))
-                ),  # type: ignore[arg-type]
+                up_direction=cast(
+                    "tuple[float, float, float]",
+                    tuple(float(x) for x in f.get("up_direction", (0, 0, 1))),
+                ),
                 ground=None if ground == "auto" else float(ground),
                 reference_probe=None
                 if probe is None
-                else tuple(float(v) for v in probe),  # type: ignore[arg-type]
+                else cast(
+                    "tuple[float, float, float]",
+                    tuple(float(v) for v in probe),
+                ),
             ),
             body_scale=float(d.get("body", {}).get("scale", 1.0)),
             body_merge_tolerance=None
             if merge_tol is None
             else float(merge_tol),
             reference_length=None if ref == "height" else float(ref),
-            domain=None if domain == "mesh" else domain,  # type: ignore[arg-type]
+            domain=None
+            if domain == "mesh"
+            else cast(
+                "tuple[float, float, float, float, float, float]", domain
+            ),
             floor_offset_H=float(d.get("floor_offset_H", 0.0)),
             grid_inset_H=float(d.get("grid_inset_H", 0.0)),
             check_vorticity=check.get("vorticity"),

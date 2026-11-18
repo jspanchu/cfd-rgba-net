@@ -18,6 +18,7 @@ import hashlib
 import itertools
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -28,7 +29,7 @@ import zarr
 from .baseline import baseline_classes
 from .batch import parse_runs, store_path
 from .config import CaseConfig, Contract, LabelRules, configs_dir
-from .io import git_state
+from .io import git_state, read_array
 from .label import CLASS_NAMES, core_mask
 from .loader import PATCH
 from .model import UNet3D
@@ -304,10 +305,12 @@ def evaluate_run(
         ``net`` and ``baseline`` (when run), each as ``score`` returns.
     """
     store = zarr.open_group(path, mode="r")
-    labels, sdf = store["labels"][:], store["body_sdf"][:]
+    labels, sdf = read_array(store, "labels"), read_array(store, "body_sdf")
     ref = labels[0] + 2 * labels[1]
-    core = core_mask(sdf > 0, store["height"][:], rules, contract.n_per_H)[1]
-    features = store["features"][:]
+    core = core_mask(
+        sdf > 0, read_array(store, "height"), rules, contract.n_per_H
+    )[1]
+    features = read_array(store, "features")
     out = {}
     if model is not None:
         p = predict(
@@ -318,7 +321,7 @@ def evaluate_run(
         )
         if probs is not None:
             out_store = zarr.open_group(probs, mode="w")
-            grid = store.attrs["grid"]
+            grid = cast("dict[str, Any]", store.attrs["grid"])
             # origin and spacing in x, y, z order and dimension_names, so the
             # ParaView Zarr reader places the arrays on the case's grid: without
             # names it reads a 3D array as (z, y, x).

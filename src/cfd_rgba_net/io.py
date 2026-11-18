@@ -114,12 +114,12 @@ def sha256(path: str | Path, chunk: int = 1 << 24) -> str:
     return digest
 
 
-def provenance(inputs: dict[str, Path]) -> dict:
+def provenance(inputs: dict[str, Path | None]) -> dict:
     """Collect what identifies the code and the inputs that built a case.
 
     Parameters
     ----------
-    inputs : dict[str, pathlib.Path]
+    inputs : dict[str, pathlib.Path or None]
         Input files by role. An entry that is ``None``, missing, or not a
         regular file is skipped without an error.
 
@@ -148,6 +148,55 @@ CHUNK = 64
 # voxels per shard edge: chunks are packed into shards, a few files per array
 SHARD = 256
 COMPRESSOR = BloscCodec(cname="zstd", clevel=5, shuffle="shuffle")
+
+
+def get_array(group: zarr.Group, name: str) -> zarr.Array:
+    """Open an array member of a Zarr group.
+
+    Parameters
+    ----------
+    group : zarr.Group
+        The group that holds the array.
+    name : str
+        The array's name in the group.
+
+    Returns
+    -------
+    zarr.Array
+        The array.
+
+    Raises
+    ------
+    TypeError
+        If the member is a group, not an array.
+    """
+    a = group[name]
+    if not isinstance(a, zarr.Array):
+        raise TypeError(f"{name!r} is a group, not an array")
+    return a
+
+
+def read_array(group: zarr.Group, name: str) -> np.ndarray:
+    """Read a whole array member of a Zarr group into memory.
+
+    Parameters
+    ----------
+    group : zarr.Group
+        The group that holds the array.
+    name : str
+        The array's name in the group.
+
+    Returns
+    -------
+    numpy.ndarray
+        The array's values.
+
+    Raises
+    ------
+    TypeError
+        If the member is a group, not an array.
+    """
+    return np.asarray(get_array(group, name)[:])
 
 
 def _put(group, name: str, a: np.ndarray):

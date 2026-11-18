@@ -18,6 +18,7 @@ from __future__ import annotations
 import itertools
 import os
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -27,6 +28,7 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from .batch import store_path
 from .config import CaseConfig, Contract, LabelRules
+from .io import get_array, read_array
 from .label import core_mask
 
 PATCH = 96  # voxels per patch side: 3 H at H/32
@@ -61,8 +63,8 @@ def build_index(store: zarr.Group, run: int) -> dict[str, np.ndarray]:
         vortex voxel, every shear-layer voxel, and ``N_FLUID`` fluid voxels
         (``body_sdf > 0``) chosen at random.
     """
-    labels = store["labels"]
-    fluid = np.flatnonzero(store["body_sdf"][:] > 0)
+    labels = get_array(store, "labels")
+    fluid = np.flatnonzero(read_array(store, "body_sdf") > 0)
     pick = np.random.default_rng(run).choice(fluid, N_FLUID, replace=False)
     coords = [
         np.argwhere(labels[0]),
@@ -104,7 +106,8 @@ def load_index(store_dir: Path, run: int, cache: Path) -> dict[str, np.ndarray]:
     # one temporary file per process: two training runs may build the same index
     # at once
     tmp = path.with_suffix(f".{os.getpid()}.tmp.npz")
-    np.savez(tmp, stamp=stamp, **index)
+    arrays: dict[str, Any] = {"stamp": stamp, **index}
+    np.savez(tmp, **arrays)
     tmp.rename(path)
     return index
 
@@ -287,16 +290,16 @@ class PatchDataset(IterableDataset):
         # faces
         lo = centre - PATCH // 2 - 1
         sdf, inside = read_crop(
-            store["body_sdf"], lo, PATCH + 2
+            get_array(store, "body_sdf"), lo, PATCH + 2
         )  # only for the core: fluid and height
-        h_H, _ = read_crop(store["height"], lo, PATCH + 2)
-        labels, _ = read_crop(store["labels"], lo, PATCH + 2)
+        h_H, _ = read_crop(get_array(store, "height"), lo, PATCH + 2)
+        labels, _ = read_crop(get_array(store, "labels"), lo, PATCH + 2)
         _, core = core_mask(
             (sdf > 0) & inside, h_H, self.rules, self.contract.n_per_H
         )
 
         inner = (...,) + (slice(1, -1),) * 3
-        f, _ = read_crop(store["features"], lo + 1, PATCH)
+        f, _ = read_crop(get_array(store, "features"), lo + 1, PATCH)
         labels, core = labels[inner], core[inner[1:]]
         # the features are invariant under the orientations, so they move with
         # the voxels and nothing else

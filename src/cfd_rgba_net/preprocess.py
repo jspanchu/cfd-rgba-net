@@ -288,6 +288,9 @@ def prepare_mesh(
             f"field_source is '{source}', but the mesh's {source} data has no "
             + " and no ".join(missing)
         )
+    # _find_vector and _find_scalar return a name whenever they return data
+    assert U is not None and p is not None
+    assert u_name is not None and p_name is not None
 
     if source == "cell":
         Uc = U
@@ -322,7 +325,8 @@ def prepare_mesh(
         U_inf, p_inf = float(np.linalg.norm(U_ref)), float(p_ref)
         U_inf_origin = f"|U| at flow.reference_probe {tuple(f.reference_probe)}"
     else:
-        U_inf, p_inf = float(f.U_inf), float(f.p_inf)  # type: ignore[arg-type]
+        assert f.U_inf is not None and f.p_inf is not None  # no probe: set
+        U_inf, p_inf = float(f.U_inf), float(f.p_inf)
         U_inf_origin = "flow.U_inf"
     if not U_inf > 0:
         raise ValueError(f"U_inf must be > 0, got {U_inf:g} ({U_inf_origin})")

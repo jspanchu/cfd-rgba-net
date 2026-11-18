@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from scipy.ndimage import binary_erosion, distance_transform_edt
@@ -288,7 +288,11 @@ class CaseGeometry:
                 if (a == self.up.index and self.up.sign < 0)
                 else start
             )
-        return ImageSpec(tuple(float(v) for v in lo), dx, tuple(n))  # type: ignore[arg-type]
+        return ImageSpec(
+            cast("tuple[float, float, float]", tuple(float(v) for v in lo)),
+            dx,
+            cast("tuple[int, int, int]", tuple(n)),
+        )
 
 
 def case_geometry(
@@ -483,9 +487,15 @@ def signed_distance(
         i1 = int(np.searchsorted(ax, b[2 * a + 1] + band, side="right"))
         sl.append(slice(max(i0, 0), min(i1, spec.dims[a])))
     sub = ImageSpec(
-        tuple(spec.origin[a] + spec.dx * sl[a].start for a in range(3)),
-        spec.dx,  # type: ignore[arg-type]
-        tuple(sl[a].stop - sl[a].start for a in range(3)),
+        cast(
+            "tuple[float, float, float]",
+            tuple(spec.origin[a] + spec.dx * sl[a].start for a in range(3)),
+        ),
+        spec.dx,
+        cast(
+            "tuple[int, int, int]",
+            tuple(sl[a].stop - sl[a].start for a in range(3)),
+        ),
     )
     exact = _exact_distance(body, sub)
 

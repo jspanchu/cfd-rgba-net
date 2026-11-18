@@ -60,3 +60,16 @@ extend-select = ["E501"]
 
 [tool.ty.environment]
 python = ".venv"
+
+# Tests and scripts build arguments dynamically (``**kwargs`` dicts, zarr and
+# torch internals), which ty cannot follow. Check these rules only in src/.
+[[tool.ty.overrides]]
+include = ["tests/**", "scripts/**"]
+
+[tool.ty.overrides.rules]
+invalid-argument-type = "ignore"
+not-subscriptable = "ignore"
+missing-union-attribute = "ignore"
+unsupported-operator = "ignore"
+not-iterable = "ignore"
+no-matching-overload = "ignore"
