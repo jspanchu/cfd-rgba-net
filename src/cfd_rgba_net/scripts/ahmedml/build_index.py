@@ -3,7 +3,7 @@ Build and cache the sampling index of every run of a split (roadmap, Phase 1.1
 task 2), in parallel, with progress. Runs whose cached index is current are
 skipped, so it can be stopped and restarted.
 
-    python scripts/ahmedml/build_index.py \\
+    python src/cfd_rgba_net/scripts/ahmedml/build_index.py \\
         --out /data/cfd-rgba-net-data/ahmedML/out_v1 \\
         --csv configs/splits/ahmedml_v1.csv \\
         --cache /data/cfd-rgba-net-data/ahmedML/index

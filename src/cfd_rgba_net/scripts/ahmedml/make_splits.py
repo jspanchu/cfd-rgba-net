@@ -23,7 +23,7 @@ the same way: each is picked from the previous larger one, per tag.
 Slant and vortex fraction come from the case stores' attributes
 (``geometry.geo_parameters`` is the run's geo_parameters_<N>.csv).
 
-    python scripts/ahmedml/make_splits.py \\
+    python src/cfd_rgba_net/scripts/ahmedml/make_splits.py \\
         --out /data/cfd-rgba-net-data/ahmedML/out_v1 \\
         --csv configs/splits/ahmedml_v1.csv
 """

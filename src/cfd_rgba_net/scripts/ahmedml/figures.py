@@ -20,7 +20,8 @@ Needs matplotlib, which is not a declared dependency of the project: it is
 installed with vtk.
 
 Usage:
-    python scripts/ahmedml/figures.py slant sections hist corr \\
+    python src/cfd_rgba_net/scripts/ahmedml/figures.py \\
+        slant sections hist corr \\
         --out /data/cfd-rgba-net-data/ahmedML/out_v1 --fig figures
 """
 

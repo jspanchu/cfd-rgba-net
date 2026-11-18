@@ -21,7 +21,6 @@ cfd-rgba-net-build-case = "cfd_rgba_net.build_case:main"
 cfd-rgba-net-batch = "cfd_rgba_net.batch:main"
 cfd-rgba-net-evaluate = "cfd_rgba_net.evaluate:main"
 cfd-rgba-net-infer = "cfd_rgba_net.infer:main"
-cfd-rgba-net-render = "cfd_rgba_net.render:main"
 
 [dependency-groups]
 dev = [
@@ -65,7 +64,7 @@ python = ".venv"
 # Tests and scripts build arguments dynamically (``**kwargs`` dicts, zarr and
 # torch internals), which ty cannot follow. Check these rules only in src/.
 [[tool.ty.overrides]]
-include = ["tests/**", "scripts/**"]
+include = ["tests/**", "src/cfd_rgba_net/scripts/**"]
 
 [tool.ty.overrides.rules]
 invalid-argument-type = "ignore"

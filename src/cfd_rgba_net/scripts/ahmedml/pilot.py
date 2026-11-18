@@ -3,12 +3,13 @@ Train the 3D UNet for the Phase 1.1 pilot (roadmap, task 7).
 
 Example: use 2 gpus on a machine
 
-    torchrun --nproc_per_node=2 scripts/ahmedml/pilot.py \\
+    torchrun --nproc_per_node=2 src/cfd_rgba_net/scripts/ahmedml/pilot.py \\
         --stores /data2/cfd-rgba-net-data/ahmedML/out_v1 \\
         --cache /data2/cfd-rgba-net-data/ahmedML/index --out runs/pilot
 
 Example: run the overfit test
-    python scripts/ahmedml/pilot.py ... --overfit 216 --max-epochs 40 \\
+    python src/cfd_rgba_net/scripts/ahmedml/pilot.py ... \\
+        --overfit 216 --max-epochs 40 \\
         --out runs/overfit
 
 By default it trains on the 100-run pilot subset of the train split (``--subset

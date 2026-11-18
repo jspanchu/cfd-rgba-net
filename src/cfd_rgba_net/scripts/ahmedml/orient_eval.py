@@ -5,7 +5,7 @@ augments with the 48 axis permutations and flips of a cube. A net that was
 trained without them scores well on the stored orientation and poorly on the
 rest.
 
-    python -I scripts/ahmedml/orient_eval.py \\
+    python -I src/cfd_rgba_net/scripts/ahmedml/orient_eval.py \\
         --stores /data/cfd-rgba-net-data/ahmedML/out_v1 \\
         --out results/orient.json runs/r0_seed1/last.pt runs/r2_noaug/last.pt
 

@@ -21,7 +21,7 @@ file exists with the recorded size. A failed run is logged to
 <staging>/failures.log and its staged original is kept. The exit status is 0
 even when runs failed; check the log or the final "finished" line.
 
-    python scripts/ahmedml/fix_wedges.py --runs 1-499 \
+    python src/cfd_rgba_net/scripts/ahmedml/fix_wedges.py --runs 1-499 \
         --data /data/cfd-rgba-net-data/ahmedML/data \
         --staging /data/cfd-rgba-net-data/ahmedML/staging --workers 2
 """

@@ -4,7 +4,7 @@ hf_repo: neashton/drivaerml
 # Verified on run 1. On Hugging Face, volume_{run}.vtu is split into volume_{run}.vtu.00.part and .01.part
 # (concatenate them): 147M cells (139.8M hexahedra, 6.3M polyhedra, 1.3M wedges, a few pyramids and
 # tetrahedra), OpenFOAM v2212, 49 GB of inline base64 that takes ~10 min to read. Rewritten in appended raw
-# binary with LZ4 (as scripts/ahmedml/fix_wedges.py writes), it is 35 GB and reads in ~20 s.
+# binary with LZ4 (as src/cfd_rgba_net/scripts/ahmedml/fix_wedges.py writes), it is 35 GB and reads in ~20 s.
 # Every wedge is inside out, as in AhmedML (1,324,673 of 1,324,673 on run 1). fix_wedges.convert flips
 # them and writes the appended LZ4 file; run 1 is fixed (volume_1.fixed.json: shared same-wound faces
 # 2,946,890 -> 0; 538 near-flat wedges fail vtkCellValidator in both orders and are kept; 6 hexahedra test

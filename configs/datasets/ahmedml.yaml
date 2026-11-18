@@ -1,5 +1,5 @@
 dataset: AhmedML
-hf_repo: jspanchu/ahmedml          # neashton/ahmedml with the VTK_WEDGE point order fixed (scripts/ahmedml/fix_wedges.py)
+hf_repo: jspanchu/ahmedml          # neashton/ahmedml with the VTK_WEDGE point order fixed (src/cfd_rgba_net/scripts/ahmedml/fix_wedges.py)
 
 # Paths relative to the data root; {run} is the run number.
 files:
