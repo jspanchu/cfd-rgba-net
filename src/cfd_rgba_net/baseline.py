@@ -259,9 +259,5 @@ def baseline_classes(
     numpy.ndarray
         Uint8 ``(nx, ny, nz)``: 0 none, 1 vortex, 2 shear layer.
     """
-    lam2, Q, omega = features
-    vortex = (lam2 < -rules.tau_lambda2) & (Q > 0)
-    shear = (omega > rules.tau_omega) & ~vortex
-    return (
-        (vortex.astype(np.uint8) + 2 * shear.astype(np.uint8)) * core
-    ).astype(np.uint8)
+    vortex, shear = rules.apply(features, core)
+    return vortex.astype(np.uint8) + 2 * shear.astype(np.uint8)

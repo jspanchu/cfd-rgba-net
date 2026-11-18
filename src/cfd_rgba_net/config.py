@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
+import torch
 import yaml
 
 from . import CONTRACT_VERSION, LABEL_RULES_VERSION
@@ -181,6 +182,39 @@ class LabelRules:
                 f"code is v{LABEL_RULES_VERSION}"
             )
         return r
+
+    def apply[ArrayT: (np.ndarray, torch.Tensor)](
+        self, features: ArrayT, core: ArrayT
+    ) -> tuple[ArrayT, ArrayT]:
+        """Apply the label rules to lambda2*, Q* and |omega|*.
+
+        A voxel is:
+        1. a vortex when lambda2* < -tau_lambda2 and Q* > 0
+        2. a shear layer when |omega|* > tau_omega and NOT vortex
+        3. Both must be within core region.
+
+        Parameters
+        ----------
+        features : numpy.ndarray or torch.Tensor
+            ``(3, nx, ny, nz)``: lambda2*, Q* and |omega|*, in the order of
+            ``FEATURE_NAMES``.
+        core : numpy.ndarray or torch.Tensor
+            Bool ``(nx, ny, nz)``, the voxels where labels may be set. Same
+            array type as ``features``.
+        rules : LabelRules
+            The label thresholds.
+
+        Returns
+        -------
+        vortex : numpy.ndarray or torch.Tensor
+            Bool ``(nx, ny, nz)``, the vortex voxels.
+        shear : numpy.ndarray or torch.Tensor
+            Bool ``(nx, ny, nz)``, the shear-layer voxels, never a vortex.
+        """
+        lam2, Q, omega = features
+        vortex = (lam2 < -self.tau_lambda2) & (Q > 0) & core
+        shear = (omega > self.tau_omega) & ~vortex & core
+        return vortex, shear
 
     def wall_erosion_voxels(self, n_per_H: int) -> int:
         """Convert the wall erosion distance to a whole number of voxels.

@@ -133,8 +133,11 @@ def make_labels(
 
     vortex = (ing["lambda2_nd"] < -rules.tau_lambda2) & (ing["Q_nd"] > 0) & core
     shear = (ing["omega_mag_nd"] > rules.tau_omega) & ~vortex & core
-
-    labels = np.stack([vortex, shear]).astype(np.uint8)
+    features = np.stack(
+        (ing["lambda2_nd"], ing["Q_nd"], ing["omega_mag_nd"]), axis=0
+    )
+    vortex, shear = rules.apply(features=features, core=core)
+    labels = np.stack((vortex, shear)).astype(np.uint8)
     n_fluid = max(int(fluid.sum()), 1)
     fractions = {
         c: float(labels[i][fluid].sum() / n_fluid)

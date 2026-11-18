@@ -266,33 +266,6 @@ def case_ingredients(
     )
 
 
-def rule_classes(
-    q: torch.Tensor, core: torch.Tensor, rules: LabelRules
-) -> torch.Tensor:
-    """Apply the label rules to lambda2*, Q* and |omega|*.
-
-    Works as ``label.make_labels`` does.
-
-    Parameters
-    ----------
-    q : torch.Tensor
-        Float ``(3, nx, ny, nz)``: lambda2*, Q* and |omega|*.
-    core : torch.Tensor
-        Bool ``(nx, ny, nz)``: the voxels where labels may be set.
-    rules : LabelRules
-        The label thresholds.
-
-    Returns
-    -------
-    torch.Tensor
-        Float32 ``(3, nx, ny, nz)``: one-hot none, vortex, shear layer, like the
-        net's probabilities.
-    """
-    vortex = (q[0] < -rules.tau_lambda2) & (q[1] > 0) & core
-    shear = (q[2] > rules.tau_omega) & ~vortex & core
-    return torch.stack([~(vortex | shear), vortex, shear]).float()
-
-
 def normalized_entropy(p: torch.Tensor) -> torch.Tensor:
     """Measure how uncertain the net is per voxel.
 
@@ -453,7 +426,8 @@ def main(argv: list[str] | None = None):
         p = predict(model, q, device).cpu() * core
         step(f"probabilities on {device}")
     else:
-        p = rule_classes(q, core, rules)
+        vortex, shear = rules.apply(q, core)
+        p = torch.stack([~(vortex | shear), vortex, shear]).float()
         step("rules applied")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
