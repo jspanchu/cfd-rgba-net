@@ -43,7 +43,7 @@ COUNTS = ("inter", "pred", "ref", "surf_match", "surf")
 
 
 @torch.no_grad()
-def predict(model: torch.nn.Module, x: np.ndarray, device: torch.device) -> torch.Tensor:
+def predict(model: torch.nn.Module, x: torch.Tensor, device: torch.device) -> torch.Tensor:
     """Run the net over a whole case with overlapping windows.
 
     The case gets a zero margin of ``PAD`` voxels on every side, and windows are zero-padded where they leave
@@ -55,11 +55,12 @@ def predict(model: torch.nn.Module, x: np.ndarray, device: torch.device) -> torc
     ----------
     model : torch.nn.Module
         The network in eval mode, on ``device``: it returns logits ``(1, 3, D, H, W)``.
-    x : numpy.ndarray
-        The case's raw ``features``, ``(3, nx, ny, nz)``.
+    x : torch.Tensor
+        The case's raw float32 ``features``, ``(3, nx, ny, nz)``. The padded copy stays on ``x``'s device,
+        and each batch of windows moves to ``device``.
     device : torch.device
         Where the windows run and their predictions are blended. Blending on a GPU takes about 12 bytes per
-        voxel of the padded case there, which is about 1 GiB for an AhmedML case; the inputs stay on the CPU.
+        voxel of the padded case there, which is about 1 GiB for an AhmedML case.
 
     Returns
     -------
@@ -69,8 +70,8 @@ def predict(model: torch.nn.Module, x: np.ndarray, device: torch.device) -> torc
     dims = x.shape[1:]
     inner = (slice(None),) + tuple(slice(PAD, PAD + n) for n in dims)  # the case within the padded volume
     size = [PATCH + STEP * -(-max(n + 2 * PAD - PATCH, 0) // STEP) for n in dims]  # sides the windows tile exactly
-    xp = torch.zeros(x.shape[0], *size)
-    xp[inner] = torch.from_numpy(x)
+    xp = x.new_zeros(x.shape[0], *size)
+    xp[inner] = x
 
     g = torch.arange(PATCH) - (PATCH - 1) / 2
     g = torch.exp(-g**2 / (2 * (PATCH / 8) ** 2))
@@ -226,7 +227,7 @@ def evaluate_run(
     core = core_mask(x[4] < 1, (1 - x[5]) * contract.ground_proximity_range_H, rules, contract.n_per_H)[1]
     out = {}
     if model is not None:
-        p = predict(model, store["features"][:], device) * torch.from_numpy(core).to(device)  # 0 outside the core
+        p = predict(model, torch.from_numpy(store["features"][:]), device) * torch.from_numpy(core).to(device)  # 0 outside the core
         out["net"] = score(p.argmax(0).cpu().numpy(), ref, core, x[4], surface_dice)
         if probs is not None:
             out_store = zarr.open_group(probs, mode="w")

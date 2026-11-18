@@ -13,7 +13,7 @@ def test_windowed_inference_matches_whole_volume():
     model = torch.nn.Conv3d(3, 3, 1).eval()
     x = np.random.default_rng(0).normal(size=(3, 130, 70, 50)).astype(np.float32)  # needs several padded windows
     whole = model(torch.from_numpy(x)[None]).softmax(1)[0]
-    assert (predict(model, x, torch.device("cpu")) - whole).abs().max() < 1e-4
+    assert (predict(model, torch.from_numpy(x), torch.device("cpu")) - whole).abs().max() < 1e-4
 
 
 def test_metrics_match_hand_built_masks():

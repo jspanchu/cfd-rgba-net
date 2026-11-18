@@ -97,7 +97,7 @@ def main():
             f, x, ref = (reorient(a, perm, sign) for a in (f0, x0, ref0))
             core = core_mask(x[4] < 1, (1 - x[5]) * contract.ground_proximity_range_H, rules, contract.n_per_H)[1]
             for ckpt, model in models.items():
-                p = predict(model, f, device) * torch.from_numpy(core).to(device)
+                p = predict(model, torch.from_numpy(f), device) * torch.from_numpy(core).to(device)
                 scores[ckpt][name].append(score(p.argmax(0).cpu().numpy(), ref, core, x[4], surface_dice=False))
         print(f"run {run} done, {time.time() - start:.0f} s", flush=True)
 
