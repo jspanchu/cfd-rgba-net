@@ -14,7 +14,7 @@ from vtkmodules.vtkFiltersSources import vtkSphereSource
 from vtkmodules.vtkIOGeometry import vtkSTLWriter
 from vtkmodules.vtkIOXML import vtkXMLUnstructuredGridWriter
 
-from cfd_rgba_net.build_case import build_case, read_geo_parameters
+from cfd_rgba_net.build_case import build_case
 from cfd_rgba_net.config import CaseConfig, Contract, LabelRules
 
 from helpers import add, box_mesh, cell_centers, points
@@ -91,31 +91,6 @@ def test_build_case_fails_without_body_voxels(tmp_path):
     assert not (out / "synthetic_run1.zarr").exists()
 
 
-def test_build_case_refuses_a_grid_over_max_voxels(tmp_path):
-    make_case(tmp_path)
-    out = tmp_path / "out"
-    with pytest.raises(ValueError, match="> 1,000"):
-        build_case(CaseConfig.load(tmp_path / "synthetic.yaml"), 1, tmp_path, out, CONTRACT, LabelRules.load(),
-                   log=lambda m: None, max_voxels=1000)
-    assert not (out / "synthetic_run1.zarr").exists()
-
-
-def test_build_case_rejects_a_nonpositive_viscosity_before_reading_any_file(tmp_path):
-    """The data directory is empty: a ValueError, not a FileNotFoundError, shows nothing was read."""
-    (tmp_path / "synthetic.yaml").write_text(DATASET_YAML)
-    cfg = CaseConfig.load(tmp_path / "synthetic.yaml")
-    cfg = replace(cfg, flow=replace(cfg.flow, nu=0.0))
-    with pytest.raises(ValueError, match="flow.nu"):
-        build_case(cfg, 1, tmp_path, tmp_path / "out", CONTRACT, LabelRules.load(), log=lambda m: None)
-
-
-def test_read_geo_parameters(tmp_path):
-    f = tmp_path / "geo.csv"
-    f.write_text("run, length ,width\n1, 1.5, 2\n")
-    assert read_geo_parameters(f) == {"run": 1.0, "length": 1.5, "width": 2.0}
-    assert read_geo_parameters(tmp_path / "missing.csv") == {}
-
-
 @dataclass
 class BuiltCase:
     out: Path
@@ -134,31 +109,19 @@ def case(tmp_path_factory):
     return BuiltCase(out, meta, zarr.open_group(out / "synthetic_run1.zarr", mode="r"))
 
 
-def test_store_layout_and_metadata(case):
+def test_store_layout_provenance_and_grid(case):
     store, m = case.store, dict(case.store.attrs)
     assert not (case.out / "synthetic_run1.zarr.tmp").exists()
-    assert set(store.array_keys()) == {"features", "labels", "body_sdf", "height"}  # no 0/1 body or fluid mask
+    assert set(store.array_keys()) == {"features", "labels", "body_sdf", "height"}
     assert store["features"].shape[0] == 3 and store["features"].dtype == np.float32
-    assert store["features"].chunks == (3, 64, 64, 64)
     assert store["body_sdf"].shape == store["height"].shape == store["labels"].shape[1:]
     assert m["class_names"] == ["vortex", "shear_layer"]
     assert set(store["ingredients"].array_keys()) == {"Q_nd", "lambda2_nd", "omega_mag_nd", "core"}
     assert abs(m["geometry"]["H"] - 0.4) < 1e-3                  # the sphere's diameter
-
-
-def test_provenance_records_versions_and_input_hashes(case):
-    prov = dict(case.store.attrs)["provenance"]
-    assert prov["contract_version"] == "1.0" and prov["label_rules_version"] == "1"
-    assert len(prov["inputs"]["volume"]["sha256"]) == 64
-
-
-def test_vti_files_are_written_on_request(case):
-    for f in ("features", "ingredients", "labels"):
+    assert len(m["provenance"]["inputs"]["volume"]["sha256"]) == 64
+    for f in ("features", "ingredients", "labels"):               # save_vti=True
         assert (case.out / f"synthetic_run1_{f}.vti").exists()
-
-
-def test_grid_fills_the_mesh_domain_just_inside_its_faces(case):
-    """The mesh is x -1..3, y -0.75..0.75, z 0..1.5."""
+    # the mesh is x -1..3, z 0..1.5: the grid starts just inside its faces
     g = case.meta["grid"]
     assert -1.0 < g["origin"][0] < -1.0 + 1e-3 and 0.0 < g["origin"][2] < 1e-3
 

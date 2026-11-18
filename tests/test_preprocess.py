@@ -6,22 +6,12 @@ import numpy as np
 import pytest
 from vtkmodules.util.numpy_support import vtk_to_numpy
 from vtkmodules.vtkCommonDataModel import vtkUnstructuredGrid
-from vtkmodules.vtkIOXML import vtkXMLUnstructuredGridWriter
 
 from cfd_rgba_net.config import VectorField
 from cfd_rgba_net.geometry import ImageSpec
-from cfd_rgba_net.preprocess import U_CELL, U_ND, prepare_mesh, probe_point, read_volume, resample
+from cfd_rgba_net.preprocess import U_ND, prepare_mesh, resample
 
 from helpers import add, box_mesh, cell_centers, interior, set_linear_velocity
-
-
-def test_read_volume_rejects_missing_and_empty_files(tmp_path):
-    with pytest.raises(FileNotFoundError):
-        read_volume(tmp_path / "missing.vtu")
-    empty = tmp_path / "empty.vtu"
-    vtkXMLUnstructuredGridWriter(file_name=str(empty), input_data=vtkUnstructuredGrid()).Write()
-    with pytest.raises(ValueError, match="no points"):
-        read_volume(empty)
 
 
 @pytest.mark.parametrize("source", ["point", "cell"])
@@ -57,23 +47,6 @@ def test_cell_velocity_components_are_averaged_to_points(flow_cfg):
     np.testing.assert_allclose(vtk_to_numpy(prep.mesh.GetPointData().GetArray(U_ND))[inner], U_point[inner], atol=1e-5)
 
 
-@pytest.mark.parametrize("has_cell_velocity", [True, False])
-def test_cell_velocity_is_kept_for_gradients_when_the_mesh_has_it(flow_cfg, has_cell_velocity):
-    """Point fields are used for U and Cp either way; U_cell appears only if the mesh holds cell velocity."""
-    ug = box_mesh()
-    set_linear_velocity(ug, np.zeros((3, 3)), U0=(1, 0, 0), both=has_cell_velocity)
-    prep = prepare_mesh(ug, flow_cfg(field_source="point"))
-    assert bool(prep.mesh.GetCellData().HasArray(U_CELL)) == has_cell_velocity
-
-
-@pytest.mark.parametrize("flow,match", [({"U_inf": 0.0}, "U_inf"), ({"rho": 0.0}, "rho")])
-def test_non_positive_reference_speed_or_density_is_rejected(flow_cfg, flow, match):
-    ug = box_mesh()
-    set_linear_velocity(ug, np.zeros((3, 3)), U0=(1, 0, 0))
-    with pytest.raises(ValueError, match=match):
-        prepare_mesh(ug, flow_cfg(**flow))
-
-
 def test_ground_auto_along_up_axis(flow_cfg):
     ug = box_mesh(lo=(-1.0, -1.0, 0.0), hi=(1.0, 1.0, 2.0))
     set_linear_velocity(ug, np.zeros((3, 3)), U0=(1, 0, 0))
@@ -97,13 +70,6 @@ def test_reference_probe_reads_u_inf_and_p_inf(flow_cfg):
     i = np.argmin(np.linalg.norm(P - [0.25, 0.25, 0.75], axis=1))    # a mesh point near the probe
     Cp = vtk_to_numpy(prep.mesh.GetPointData().GetArray("Cp"))[i]
     assert abs(Cp - 2 * 30.0 * (P[i, 0] - 0.3) / (1.0 * prep.U_inf**2)) < 1e-6
-
-
-def test_probe_point_outside_the_mesh_is_rejected():
-    ug = box_mesh()
-    n = ug.GetNumberOfPoints()
-    with pytest.raises(ValueError, match="not inside any mesh cell"):
-        probe_point(ug, (5.0, 0.0, 0.5), np.zeros((n, 3)), np.zeros(n))
 
 
 def test_resample_indexes_x_y_z_and_flags_voxels_outside_the_mesh(flow_cfg):

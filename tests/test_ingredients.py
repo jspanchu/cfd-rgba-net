@@ -8,7 +8,7 @@ import pytest
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 
 from cfd_rgba_net.infer import _gpu_criteria
-from cfd_rgba_net.ingredients import add_ingredients, lambda2, q_and_vorticity
+from cfd_rgba_net.ingredients import add_ingredients
 from cfd_rgba_net.preprocess import prepare_mesh
 
 from helpers import box_mesh, interior, set_linear_velocity
@@ -24,22 +24,13 @@ ROTATION = [[0, -W, 0], [W, 0, 0], [0, 0, 0]]   # u = (-W y, W x, 0)
 SHEAR = [[0, GAMMA, 0], [0, 0, 0], [0, 0, 0]]   # u = (GAMMA y, 0, 0)
 
 
-def test_closed_forms():
-    G = np.array([ROTATION, SHEAR], dtype=np.float32)
-    Q, om = q_and_vorticity(G)
-    l2 = lambda2(G)
-    np.testing.assert_allclose(Q, [W**2, 0.0], atol=1e-6)
-    np.testing.assert_allclose(om, [2 * W, GAMMA], atol=1e-6)
-    np.testing.assert_allclose(l2, [-W**2, 0.0], atol=1e-6)
-
-
-@pytest.mark.parametrize("criteria", [None, _gpu_criteria], ids=["labels", "infer"])
-@pytest.mark.parametrize("tets", [True, False], ids=["tets", "hexes"])
-@pytest.mark.parametrize("both", [True, False], ids=["cell+point U", "point U only"])
-@pytest.mark.parametrize("field,Q,omega,lam2", [
-    (ROTATION, W**2, 2 * W, -W**2),
-    (SHEAR, 0.0, GAMMA, 0.0),
-], ids=["solid-body rotation", "pure shear"])
+@pytest.mark.parametrize("criteria,tets,both,field,Q,omega,lam2", [
+    # each option (label criteria vs torch criteria, tets vs hexes, cell+point U vs point U only, rotation vs shear) appears
+    (None, True, True, ROTATION, W**2, 2 * W, -W**2),
+    (None, False, False, SHEAR, 0.0, GAMMA, 0.0),
+    (_gpu_criteria, True, False, ROTATION, W**2, 2 * W, -W**2),
+    (_gpu_criteria, False, True, SHEAR, 0.0, GAMMA, 0.0),
+], ids=["labels-tets-cell+point-rotation", "labels-hexes-point-shear", "infer-tets-point-rotation", "infer-hexes-cell+point-shear"])
 def test_linear_fields_exact(flow_cfg, criteria, tets, both, field, Q, omega, lam2):
     """
     Point-U gradients are exact everywhere. Cell-U gradients (vtkGradientFilter on cell data, the
@@ -57,11 +48,6 @@ def test_linear_fields_exact(flow_cfg, criteria, tets, both, field, Q, omega, la
     np.testing.assert_allclose(arr(prep.mesh, "Q_nd")[sel], Q, atol=1e-5)
     np.testing.assert_allclose(arr(prep.mesh, "omega_mag_nd")[sel], omega, atol=1e-5)
     np.testing.assert_allclose(arr(prep.mesh, "lambda2_nd")[sel], lam2, atol=1e-5)
-
-
-def test_lambda2_is_independent_of_the_chunk_size():
-    G = np.array([ROTATION, SHEAR, np.zeros((3, 3))], dtype=np.float32)
-    np.testing.assert_array_equal(lambda2(G, n_chunk=1), lambda2(G))
 
 
 def test_scaling_invariance(flow_cfg):

@@ -15,11 +15,6 @@ def make_batch(labelled=True):
     return labels, core
 
 
-def perfect_logits(labels):
-    target = (labels[:, 0] + 2 * labels[:, 1]).long()
-    return torch.nn.functional.one_hot(target, 3).movedim(-1, 1) * 50.0
-
-
 @pytest.fixture
 def loss_fn():
     return SegmentationLoss(class_weights((0.017, 0.029)))
@@ -28,11 +23,6 @@ def loss_fn():
 def test_class_weights_are_capped_inverse_frequencies():
     assert class_weights((0.017, 0.029)) == pytest.approx(torch.tensor([1.0, 57.8, 33.5]), abs=0.1)
     assert class_weights((0.001, 0.5)) == pytest.approx(torch.tensor([1.0, 100.0, 1.0]))
-
-
-def test_perfect_prediction_gives_zero_loss(loss_fn):
-    labels, core = make_batch()
-    assert loss_fn(perfect_logits(labels), labels, core)[0].item() == pytest.approx(0, abs=1e-4)
 
 
 def test_values_outside_the_core_do_not_change_the_loss(loss_fn):

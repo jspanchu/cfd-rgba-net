@@ -17,19 +17,12 @@ flow:
 """
 
 
-def test_parse_runs_lists_and_ranges():
-    assert parse_runs("1,5,7") == [1, 5, 7]
+def test_parse_runs_reads_lists_ranges_and_csv_columns_and_drops_duplicates(tmp_path):
     assert parse_runs("0-3,10") == [0, 1, 2, 3, 10]
-
-
-def test_parse_runs_reads_a_csv_column_and_drops_duplicates(tmp_path):
+    assert parse_runs("1,2-3,3") == [1, 2, 3]
     f = tmp_path / "runs.csv"
     f.write_text("run,length\n3,1.0\n1,2.0\n3,3.0\n")
     assert parse_runs(str(f)) == [3, 1]
-    assert parse_runs("1,2-3,3") == [1, 2, 3]
-
-
-def test_parse_runs_rejects_a_backwards_range():
     with pytest.raises(ValueError, match="backwards"):
         parse_runs("5-3")
 

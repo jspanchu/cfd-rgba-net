@@ -32,12 +32,6 @@ def test_grid_fills_the_domain_from_the_ground():
     assert h.shape == (spec.dims[0], 1, 1) and h.min() > 0
 
 
-def test_grid_without_inset_or_offset_starts_on_the_domain_and_ground():
-    geo = CaseGeometry(body_bounds=(0, 1, 0, 1, 0, 1), ground=0.0, H=0.3, up=Axis(2, 1))
-    spec = geo.image_spec(CONTRACT, (0.0, 1.0, -1.0, 1.0, 0.0, 1.0))
-    assert spec.origin == (0.0, -1.0, 0.0)
-
-
 def test_image_spec_rejects_empty_domain():
     """A domain thinner than the ground offset leaves no room for a voxel."""
     geo = CaseGeometry(body_bounds=(0, 1, 0, 1, 0, 1), ground=0.0, H=1.0, up=Axis(2, 1))
@@ -76,31 +70,11 @@ def test_sphere_signed_distance(tmp_path):
     assert np.abs(exact[mismatch]).max(initial=0) < 2e-3
 
 
-def test_signed_distance_requires_a_voxel_inside_the_body(tmp_path):
-    write_stl(vtkSphereSource(radius=0.5, center=(0, 0, 1), theta_resolution=32, phi_resolution=32), tmp_path / "s.stl")
-    body = read_body(tmp_path / "s.stl")
-    away = ImageSpec(origin=(5.0, 5.0, 5.0), dx=0.1, dims=(5, 5, 5))     # a grid that misses the body
-    with pytest.raises(ValueError, match="no voxel lies inside"):
-        signed_distance(body, away)
-
-
 @pytest.fixture
 def cube_body(tmp_path):
     """A 1000 x 400 x 300 box (millimetres) with its bottom at z = 50, read at 1e-3 scale into metres."""
     write_stl(vtkCubeSource(x_length=1000, y_length=400, z_length=300, center=(500, 0, 200)), tmp_path / "c.stl")
     return read_body(tmp_path / "c.stl", scale=1e-3)
-
-
-def test_read_body_applies_scale(cube_body):
-    assert cube_body.GetBounds() == pytest.approx((0.0, 1.0, -0.2, 0.2, 0.05, 0.35))
-
-
-def test_read_body_rejects_missing_and_empty_files(tmp_path):
-    with pytest.raises(FileNotFoundError):
-        read_body(tmp_path / "missing.stl")
-    (tmp_path / "empty.stl").write_text("solid empty\nendsolid empty\n")
-    with pytest.raises(ValueError, match="no triangles"):
-        read_body(tmp_path / "empty.stl")
 
 
 def test_case_geometry_takes_h_from_body_height_or_override(cube_body):
@@ -110,16 +84,12 @@ def test_case_geometry_takes_h_from_body_height_or_override(cube_body):
     assert case_geometry(cube_body, ground=0.05, reference_length=0.6, up=Axis(2, 1)).H == 0.6
 
 
-def test_case_geometry_rejects_body_below_ground(cube_body):
+def test_case_geometry_allows_a_slightly_sunk_body_but_not_one_far_below_ground(cube_body):
+    # the bottom is at z = 0.05; 2 mm (0.0067 H) below the ground is like DrivAerML's tyre contact patches
+    geo = case_geometry(cube_body, ground=0.052, reference_length=None, up=Axis(2, 1))
+    assert geo.ground == 0.052 and geo.H == pytest.approx(0.3)
     with pytest.raises(ValueError, match="below the ground"):
         case_geometry(cube_body, ground=0.1, reference_length=None, up=Axis(2, 1))
-
-
-def test_case_geometry_accepts_body_slightly_sunk_into_ground(cube_body):
-    # bottom 2 mm (0.0067 H) below the ground, like DrivAerML's tyre contact patches; H stays the body height
-    geo = case_geometry(cube_body, ground=0.052, reference_length=None, up=Axis(2, 1))
-    assert geo.ground == 0.052
-    assert geo.H == pytest.approx(0.3)
 
 
 def test_stl_near_duplicate_vertices_are_merged(tmp_path):

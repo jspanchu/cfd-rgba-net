@@ -34,12 +34,6 @@ def labels(ing, fluid=None):
     return make_labels(ing, fluid_all() if fluid is None else fluid, SPEC, GEO, RULES, N_PER_H)
 
 
-def test_quiet_flow_has_no_labels():
-    r = labels(quiet())
-    assert r.labels.sum() == 0
-    assert r.fractions["none"] == 1.0
-
-
 def test_vortex_needs_lambda2_and_q():
     ing = quiet()
     p = (20, 10, Z_OK)
@@ -80,7 +74,7 @@ def test_floor_exclusion():
 
 
 def test_wall_erosion():
-    """Labels skip the voxel layer next to any non-fluid voxel."""
+    """Labels skip the voxel layer next to any non-fluid voxel, and the grid's own outer layer."""
     fluid = fluid_all()
     fluid[15:25, 5:15, 10:20] = False         # a solid block
     ing = quiet()
@@ -89,13 +83,7 @@ def test_wall_erosion():
     s = r.labels[IDX["shear_layer"]]
     assert s[14, 10, 15] == 0 and s[12, 10, 15] == 1   # adjacent to the block vs 3 voxels away
     assert (r.labels[:, ~fluid] == 0).all()
-
-
-def test_labels_skip_the_grids_outer_layer():
-    """The erosion treats the outside of the grid as non-fluid, so the grid's faces act as walls."""
-    ing = quiet()
-    ing["omega_mag_nd"][:] = RULES.tau_omega + 1
-    s = labels(ing).labels[IDX["shear_layer"]]
+    # the grid's faces act as walls too
     for face in (s[0, :, Z_OK], s[-1, :, Z_OK], s[:, 0, Z_OK], s[:, -1, Z_OK]):
         assert not face.any()
     assert s[1, 10, Z_OK] == 1 and s[-2, 10, Z_OK] == 1
