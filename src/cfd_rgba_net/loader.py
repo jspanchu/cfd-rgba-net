@@ -47,10 +47,10 @@ def build_index(store: zarr.Group, run: int) -> dict[str, np.ndarray]:
     -------
     dict[str, numpy.ndarray]
         ``(n, 3)`` int32 voxel coordinates under each name in ``KINDS``: every vortex voxel, every
-        shear-layer voxel, and ``N_FLUID`` fluid voxels (``body_proximity < 1``) chosen at random.
+        shear-layer voxel, and ``N_FLUID`` fluid voxels (``body_sdf > 0``) chosen at random.
     """
     labels = store["labels"]
-    fluid = np.flatnonzero(store["inputs"][4] < 1)
+    fluid = np.flatnonzero(store["body_sdf"][:] > 0)
     pick = np.random.default_rng(run).choice(fluid, N_FLUID, replace=False)
     coords = [np.argwhere(labels[0]), np.argwhere(labels[1]), np.stack(np.unravel_index(pick, labels.shape[1:]), 1)]
     return {k: c.astype(np.int32) for k, c in zip(KINDS, coords)}
@@ -149,7 +149,7 @@ class PatchDataset(IterableDataset):
     csv : str or pathlib.Path
         The split CSV where every run is listed once in a row with it's split and subset.
     stores : str or pathlib.Path
-        The directory containing the zarr stores (inputs, labels)
+        The directory containing the zarr stores (features, labels, body_sdf, height)
     cache : str or pathlib.Path
         The directory containing the sampling indices. The loader builds the missing ones,
         this can take a few seconds per run.
@@ -225,10 +225,10 @@ class PatchDataset(IterableDataset):
         store = zarr.open_group(self.stores[run], mode="r")
         # one extra voxel on every side, so the erosion is right at the patch's faces
         lo = centre - PATCH // 2 - 1
-        x, inside = read_crop(store["inputs"], lo, PATCH + 2)  # only for the core: fluid and height
+        sdf, inside = read_crop(store["body_sdf"], lo, PATCH + 2)  # only for the core: fluid and height
+        h_H, _ = read_crop(store["height"], lo, PATCH + 2)
         labels, _ = read_crop(store["labels"], lo, PATCH + 2)
-        h_H = (1 - x[5]) * self.contract.ground_proximity_range_H  # exact where it matters: the floor is below the range
-        _, core = core_mask((x[4] < 1) & inside, h_H, self.rules, self.contract.n_per_H)
+        _, core = core_mask((sdf > 0) & inside, h_H, self.rules, self.contract.n_per_H)
 
         inner = (...,) + (slice(1, -1),) * 3
         f, _ = read_crop(store["features"], lo + 1, PATCH)

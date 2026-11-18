@@ -1,15 +1,16 @@
 """
-Build one training case: model inputs, label ingredients and labels on the voxel grid.
+Build one training case: the net's features, label ingredients and labels on the voxel grid.
 
     cfd-rgba-net-build-case --dataset ahmedml --run 1 --data /data/.../ahmedML/data --out out
 
 Writes one Zarr v3 store, <out>/<tag>.zarr, with <tag> = <dataset>_run<N>:
-    inputs          (6, nx, ny, nz) float32: u, v, w, Cp, body_proximity, ground_proximity
-    labels          (2, nx, ny, nz) uint8: vortex, shear_layer
     features        (3, nx, ny, nz) float32: lambda2*, Q*, |omega|* from the grid's own velocity, the net's inputs
+    labels          (2, nx, ny, nz) uint8: vortex, shear_layer
+    body_sdf        (nx, ny, nz) float32: signed distance to the body in units of H, negative inside
+    height          (nx, ny, nz) float32: height above the ground in units of H
     ingredients/    Q_nd, lambda2_nd, omega_mag_nd (float32), core (bool): teacher only
     attributes      grid, case config, contract, label rules, geometry, checks, provenance
-and, with --save-vti, <tag>_{inputs,ingredients,labels}.vti for viewing.
+and, with --save-vti, <tag>_{features,ingredients,labels}.vti for viewing.
 The grid fills the dataset's domain (configs/datasets/<name>.yaml `domain`, default: the mesh bounds).
 """
 
@@ -103,8 +104,8 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
 
     The steps: read the volume mesh, select and non-dimensionalize its fields, read the body, build the
     voxel grid, compute the label ingredients on the native mesh, resample them to the grid, assemble the
-    input channels, make the labels, compute the net's features on the grid, and write ``<out>/<dataset>_run<run>.zarr`` (and, with ``save_vti``,
-    three ``.vti`` files for viewing).
+    velocity and the geometry arrays, make the labels, compute the net's features on the grid, and write
+    ``<out>/<dataset>_run<run>.zarr`` (and, with ``save_vti``, three ``.vti`` files for viewing).
 
     Parameters
     ----------
@@ -121,7 +122,7 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
     rules : LabelRules
         The label rules.
     save_vti : bool, optional
-        Also write ``<tag>_{inputs,ingredients,labels}.vti``.
+        Also write ``<tag>_{features,ingredients,labels}.vti``.
     log : callable, optional
         Called with one progress message (str) per step. Defaults to ``print``.
     max_voxels : int, optional
@@ -135,8 +136,8 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
     Raises
     ------
     ValueError
-        If the contract's channels differ from the ones ``preprocess`` builds; if ``flow.nu`` is not
-        positive; if the grid exceeds ``max_voxels``; or if no voxel lies inside the body.
+        If ``flow.nu`` is not positive; if the grid exceeds ``max_voxels``; or if no voxel lies inside the
+        body.
     FileNotFoundError
         If the volume or body file is missing.
     KeyError
@@ -146,16 +147,13 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
     from vtkmodules.vtkCommonCore import vtkSMPTools
 
     from . import io
-    from .baseline import grid_features
+    from .baseline import FEATURE_NAMES, grid_features
     from .config import axis_of
     from .geometry import case_geometry, read_body
     from .ingredients import INGREDIENTS, add_ingredients
     from .label import CLASS_NAMES, describe, make_labels
-    from .preprocess import CP, INPUT_CHANNELS, U_ND, assemble_inputs, prepare_mesh, read_volume, resample
+    from .preprocess import U_ND, assemble_grid, prepare_mesh, read_volume, resample
 
-    if tuple(contract.channels) != INPUT_CHANNELS:
-        raise ValueError(f"contract channels {list(contract.channels)} != the channels preprocess builds "
-                         f"{list(INPUT_CHANNELS)}")
     # Re_H = U_inf H / nu goes into the metadata, after all the work: fail before reading anything
     if not cfg.flow.nu > 0:
         raise ValueError(f"flow.nu must be > 0, got {cfg.flow.nu}")
@@ -196,34 +194,33 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
     step(f"ingredients ready: {checks}")
 
     # keep only what is resampled: the probe carries every array along
-    keep = {U_ND, CP, *INGREDIENTS}
+    keep = {U_ND, *INGREDIENTS}
     prep.mesh.GetCellData().Initialize()
     pd = prep.mesh.GetPointData()
     for name in [pd.GetArrayName(i) for i in range(pd.GetNumberOfArrays())]:
         if name not in keep:
             pd.RemoveArray(name)
-    image = resample(prep.mesh, spec, [U_ND, CP, *INGREDIENTS])
+    image = resample(prep.mesh, spec, [U_ND, *INGREDIENTS])
     del prep.mesh  # free the mesh; the reference values on prep are still used below
     step("resampled to the voxel grid")
 
-    inp = assemble_inputs(image, body, geo, spec, contract)
-    checks["voxels"] = inp.checks
-    step(f"inputs assembled: {inp.checks}")
-    if inp.checks["n_not_in_mesh_nor_body"] > 0:
-        step(f"[warn] {inp.checks['n_not_in_mesh_nor_body']:,} voxels are outside both the mesh and the body "
+    grid = assemble_grid(image, body, geo, spec, contract)
+    checks["voxels"] = grid.checks
+    step(f"grid arrays assembled: {grid.checks}")
+    if grid.checks["n_not_in_mesh_nor_body"] > 0:
+        step(f"[warn] {grid.checks['n_not_in_mesh_nor_body']:,} voxels are outside both the mesh and the body "
              "(box leaves the CFD domain, or the mesh has holes); they are not fluid")
 
     ing = {k: image[k] for k in INGREDIENTS}
-    lab = make_labels(ing, inp.fluid, spec, geo, rules, contract.n_per_H)
+    lab = make_labels(ing, grid.fluid, spec, geo, rules, contract.n_per_H)
     step("class fractions over fluid voxels: " + ", ".join(f"{k}={v:.4f}" for k, v in lab.fractions.items()))
-    # the net's inputs, from the stored channels alone, so scripts/ahmedml/add_features.py gives the same array
-    features = grid_features(inp.inputs[:3], inp.inputs[4] < 1, 1 / contract.n_per_H)
+    # the gradient mask is "not inside the body" (body_sdf > 0), as at inference
+    features = grid_features(grid.u, grid.body_sdf > 0, 1 / contract.n_per_H)
     step("grid features ready")
 
     if save_vti:
-        io.save_vti(out / f"{tag}_inputs.vti", spec, {"U_nd": inp.inputs[:3], "Cp": inp.inputs[3],
-                                                     "body_proximity": inp.inputs[4],
-                                                     "ground_proximity": inp.inputs[5]})
+        io.save_vti(out / f"{tag}_features.vti", spec, {**dict(zip(FEATURE_NAMES, features)),
+                                                       "body_sdf": grid.body_sdf, "height": grid.height})
         io.save_vti(out / f"{tag}_ingredients.vti", spec, {**ing, "core": lab.core.astype("uint8")})
         io.save_vti(out / f"{tag}_labels.vti", spec, {**{c: lab.labels[i] for i, c in enumerate(CLASS_NAMES)},
                                                      "n_labels": lab.labels.sum(0).astype("uint8")})
@@ -242,7 +239,6 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
                       up_axis=str(up), domain=list(domain),
                       Re_H=prep.U_inf * geo.H / cfg.flow.nu,
                       geo_parameters=read_geo_parameters(geo_path) if geo_path else {}),
-        channel_names=list(contract.channels),
         reference=dict(U_inf=prep.U_inf, p_inf=prep.p_inf, rho=cfg.flow.rho,
                        source=f"probe at {list(cfg.flow.reference_probe)}" if cfg.flow.reference_probe else "config"),
         fields=dict(velocity=prep.velocity_source, pressure=prep.pressure_source),
@@ -253,7 +249,7 @@ def build_case(cfg: CaseConfig, run: int, data: Path, out: Path, contract: Contr
         runtime_s=time.time() - t0,
     )
     io.save_case_zarr(store_path(cfg, out, run), spec,
-                      arrays=dict(inputs=inp.inputs, labels=lab.labels, features=features),
+                      arrays=dict(features=features, labels=lab.labels, body_sdf=grid.body_sdf, height=grid.height),
                       groups=dict(ingredients={**{k: v.astype("float32") for k, v in ing.items()}, "core": lab.core}),
                       attrs=meta)
     step(f"wrote {tag}.zarr")

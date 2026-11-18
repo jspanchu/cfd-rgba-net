@@ -38,7 +38,8 @@ STEP = PATCH // 2  # windows overlap by half
 # with it. Half a stride keeps every grid edge away from the window edges.
 PAD = STEP // 2
 WINDOW_BATCH = 8  # windows per forward pass
-NEAR_BODY = 0.9375  # body_proximity of 0.25 H from the body: 1 - 0.25 / 4
+NEAR_BODY_H = 0.25  # the near-body region: within this distance of the body, in units of H
+FAR_BODY_H = 4.0    # the far region: at least this far from the body, in units of H
 COUNTS = ("inter", "pred", "ref", "surf_match", "surf")
 
 
@@ -142,7 +143,7 @@ def metrics(c: dict[str, int]) -> dict[str, float | None]:
                 surface_dice=ratio(c["surf_match"], c["surf"]))
 
 
-def score(pred: np.ndarray, ref: np.ndarray, core: np.ndarray, body_proximity: np.ndarray,
+def score(pred: np.ndarray, ref: np.ndarray, core: np.ndarray, body_sdf: np.ndarray,
           surface_dice: bool = True) -> dict:
     """Count one case's agreement with the reference, per region and class.
 
@@ -154,8 +155,8 @@ def score(pred: np.ndarray, ref: np.ndarray, core: np.ndarray, body_proximity: n
         The reference, in the same form.
     core : numpy.ndarray
         Bool ``(nx, ny, nz)``, the voxels that count.
-    body_proximity : numpy.ndarray
-        The body proximity channel, ``(nx, ny, nz)``.
+    body_sdf : numpy.ndarray
+        The signed distance to the body in units of H, ``(nx, ny, nz)``.
     surface_dice : bool, optional
         False skips the surface counts, as in ``class_counts``.
 
@@ -165,7 +166,7 @@ def score(pred: np.ndarray, ref: np.ndarray, core: np.ndarray, body_proximity: n
         ``{region: {class name: counts}}`` for the regions ``all`` (core voxels), ``near_body`` (within
         0.25 H of the body) and ``far`` (beyond 4 H from it).
     """
-    regions = dict(all=core, near_body=core & (body_proximity >= NEAR_BODY), far=core & (body_proximity == 0))
+    regions = dict(all=core, near_body=core & (body_sdf <= NEAR_BODY_H), far=core & (body_sdf >= FAR_BODY_H))
     return {r: {name: class_counts(pred == k + 1, ref == k + 1, m, surface_dice) for k, name in enumerate(CLASS_NAMES)}
             for r, m in regions.items()}
 
@@ -222,13 +223,14 @@ def evaluate_run(
         ``net`` and ``baseline`` (when run), each as ``score`` returns.
     """
     store = zarr.open_group(path, mode="r")
-    x, labels = store["inputs"][:], store["labels"][:]
+    labels, sdf = store["labels"][:], store["body_sdf"][:]
     ref = labels[0] + 2 * labels[1]
-    core = core_mask(x[4] < 1, (1 - x[5]) * contract.ground_proximity_range_H, rules, contract.n_per_H)[1]
+    core = core_mask(sdf > 0, store["height"][:], rules, contract.n_per_H)[1]
+    features = store["features"][:]
     out = {}
     if model is not None:
-        p = predict(model, torch.from_numpy(store["features"][:]), device) * torch.from_numpy(core).to(device)  # 0 outside the core
-        out["net"] = score(p.argmax(0).cpu().numpy(), ref, core, x[4], surface_dice)
+        p = predict(model, torch.from_numpy(features), device) * torch.from_numpy(core).to(device)  # 0 outside the core
+        out["net"] = score(p.argmax(0).cpu().numpy(), ref, core, sdf, surface_dice)
         if probs is not None:
             out_store = zarr.open_group(probs, mode="w")
             grid = store.attrs["grid"]
@@ -238,7 +240,7 @@ def evaluate_run(
             for name, a in zip(("p_vortex", "p_shear_layer"), p[1:].cpu().numpy()):
                 out_store.create_array(name, data=a, dimension_names=("x", "y", "z"))
     if baseline:
-        out["baseline"] = score(baseline_classes(x, core, contract, rules), ref, core, x[4], surface_dice)
+        out["baseline"] = score(baseline_classes(features, core, rules), ref, core, sdf, surface_dice)
     return out
 
 

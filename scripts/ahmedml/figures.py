@@ -3,12 +3,12 @@ Progress figures (data trends and distributions) from the AhmedML case stores
 (<out>/ahmedml_run<N>.zarr, written by cfd-rgba-net-batch).
 
     slant      box plots of per-case class fraction vs. slant-angle bin   (store attributes only)
-    sections   y=0 and crossflow slices of u/Uinf and labels for two runs (2-D slices of two stores)
-    hist       per-class histograms of the input channels                 (voxel sample)
-    corr       Spearman correlation of inputs, ingredients and labels     (voxel sample)
+    sections   y=0 and crossflow slices of lambda2* and labels for two runs (2-D slices of two stores)
+    hist       per-class histograms of the features, body_sdf and height  (voxel sample)
+    corr       Spearman correlation of features, ingredients and labels   (voxel sample)
 
-The voxel sample is --per-run random voxels outside the body (body_proximity < 1; seeded by run number)
-from each store: inputs (u, v, w, Cp, body_proximity, ground_proximity), ingredients (Q*, lambda2*,
+The voxel sample is --per-run random voxels outside the body (body_sdf > 0; seeded by run number)
+from each store: features (lambda2*, Q*, |omega|*, body_sdf, height), ingredients (Q*, lambda2*,
 |omega|*) and labels (vortex, shear_layer). It is drawn once per invocation and shared by hist and corr.
 
 Needs matplotlib, which is not a declared dependency of the project: it is installed with vtk.
@@ -26,7 +26,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import zarr
-from matplotlib.colors import LinearSegmentedColormap, ListedColormap, TwoSlopeNorm
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap, SymLogNorm
 from matplotlib.patches import Patch
 
 INK, INK2, GRID, SURF = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
@@ -202,7 +202,7 @@ def label_index(lab, classes):
 
 
 def fig_sections(out, fig_dir, runs):
-    """Plot two slices of u/U∞ and of the labels for each of some runs.
+    """Plot two slices of λ₂* and of the labels for each of some runs.
 
     Each run is a row of four panels: the symmetry plane y = 0, cropped to the body's nose minus 0.5 H
     through its base plus 4 H and to z <= 2 H, and the crossflow plane 1 H behind the base with
@@ -230,7 +230,7 @@ def fig_sections(out, fig_dir, runs):
     classes = None
     fig, axes = plt.subplots(len(runs), 4, figsize=(17, 2.6 * len(runs) + 1.4), layout="constrained",
                              gridspec_kw=dict(width_ratios=[2.6, 2.6, 1, 1]), squeeze=False)
-    norm = TwoSlopeNorm(vmin=-0.5, vcenter=0.0, vmax=1.5)
+    norm = SymLogNorm(linthresh=0.5, vmin=-100, vmax=100)  # λ₂* < 0 (red) marks vortex cores
     for row, run in zip(axes, runs):
         g = open_store(paths[run])
         a = dict(g.attrs)
@@ -245,13 +245,11 @@ def fig_sections(out, fig_dir, runs):
         ys = (o[1] + np.arange(ny) * dx) / H
         zs = (o[2] + np.arange(nz) * dx) / H
         iz = zs <= 2.0
-        u_ch = a["channel_names"].index("u")
-        b_ch = a["channel_names"].index("body_proximity")
 
         def section(sel):
-            """u/Uinf (masked in the body) and label index (n_idx in the body) on one plane."""
-            body = g["inputs"][(b_ch,) + sel] > 1  # inside the body: body_proximity > 1
-            u = np.ma.masked_where(body, g["inputs"][(u_ch,) + sel])
+            """λ₂* (masked in the body) and label index (n_idx in the body) on one plane."""
+            body = g["body_sdf"][sel] < 0
+            u = np.ma.masked_where(body, g["features"][(0,) + sel])
             lab = label_index(g["labels"][(slice(None),) + sel], classes)
             lab[body] = n_idx
             return u, lab
@@ -266,7 +264,7 @@ def fig_sections(out, fig_dir, runs):
         row[0].set_facecolor(BODY)
         row[1].imshow(lab[ix][:, iz].T, origin="lower", extent=ext, cmap=lab_cmap, vmin=-0.5, vmax=n_idx + 0.5,
                       aspect="equal", interpolation="nearest")
-        row[0].set_title(f"run {run}, slant {slant_of(a):.1f}°: u/U∞ on y = 0")
+        row[0].set_title(f"run {run}, slant {slant_of(a):.1f}°: λ₂* on y = 0")
         row[1].set_title(f"run {run}: labels on y = 0")
         # crossflow plane 1 H behind the base, |y| <= 1.5 H
         i = int(np.argmin(np.abs(xs - (x_base + 1.0))))
@@ -278,14 +276,14 @@ def fig_sections(out, fig_dir, runs):
         row[2].set_facecolor(BODY)
         row[3].imshow(lab[iy][:, iz].T, origin="lower", extent=ext2, cmap=lab_cmap, vmin=-0.5, vmax=n_idx + 0.5,
                       aspect="equal", interpolation="nearest")
-        row[2].set_title("u/U∞ at x = base + 1 H")
+        row[2].set_title("λ₂* at x = base + 1 H")
         row[3].set_title("labels at x = base + 1 H")
         for ax in row[:2]:
             ax.set_xlabel("x / H"); ax.set_ylabel("z / H")
         for ax in row[2:]:
             ax.set_xlabel("y / H"); ax.set_ylabel("z / H")
     cb = fig.colorbar(im, ax=axes[-1, 0], location="bottom", shrink=0.9, aspect=40)
-    cb.set_label("u / U∞  (red = reversed flow)")
+    cb.set_label("λ₂*  (red = vortex core)")
     handles = [Patch(color=COLOR[c], label=LABEL[c]) for c in classes] + [Patch(color=BODY, label="body")]
     fig.legend(handles=handles, loc="outside lower right", ncol=len(handles))
     fig.suptitle("Symmetry-plane (y = 0) and crossflow sections")
@@ -296,8 +294,8 @@ def fig_sections(out, fig_dir, runs):
 def sample_run(run, path, n):
     """Draw random voxels outside the body from one store.
 
-    "Outside the body" is ``body_proximity < 1``. It also includes any voxel outside the mesh, whose
-    inputs are zero. AhmedML's domain is the whole mesh, so there are almost none. The draw is seeded by
+    "Outside the body" is ``body_sdf > 0``. It also includes any voxel outside the mesh, whose
+    features are zero. AhmedML's domain is the whole mesh, so there are almost none. The draw is seeded by
     the run number, so it is reproducible. Voxels that no class applies to include those the label rules
     exclude near walls and the floor.
 
@@ -313,20 +311,20 @@ def sample_run(run, path, n):
     Returns
     -------
     x : numpy.ndarray
-        Input channels, shape ``(C_in, n)``.
+        The features, ``body_sdf`` and ``height``, shape ``(5, n)``.
     ing : numpy.ndarray
         Label ingredients ``Q*``, ``lambda2*`` and ``|omega|*``, shape ``(3, n)``.
     y : numpy.ndarray
         Boolean labels, shape ``(C, n)``.
     channels : list[str]
-        The input channel names.
+        The names of the rows of ``x``.
     classes : list[str]
         The class names.
     """
     g = open_store(path)
     a = dict(g.attrs)
-    b = g["inputs"][a["channel_names"].index("body_proximity")]
-    fluid = np.flatnonzero(b < 1)  # outside the body
+    b = g["body_sdf"][:]
+    fluid = np.flatnonzero(b > 0)  # outside the body
     rng = np.random.default_rng(run)
     k = np.sort(rng.choice(fluid, min(n, fluid.size), replace=False))
     ijk = np.unravel_index(k, b.shape)
@@ -337,10 +335,10 @@ def sample_run(run, path, n):
         coords = (np.repeat(np.arange(c), k.size),) + tuple(np.tile(q, c) for q in ijk)
         return arr.vindex[coords].reshape(c, k.size)
 
-    x = take(g["inputs"])
+    x = np.concatenate([take(g["features"]), g["body_sdf"].vindex[ijk][None], g["height"].vindex[ijk][None]])
     ing = np.stack([g["ingredients"][name].vindex[ijk] for name in INGREDIENTS])
     y = take(g["labels"]).astype(bool)
-    return x, ing, y, a["channel_names"], a["class_names"]
+    return x, ing, y, CHANNELS, a["class_names"]
 
 
 def load_sample(out, per_run, max_runs=None, workers=8):
@@ -360,7 +358,7 @@ def load_sample(out, per_run, max_runs=None, workers=8):
     Returns
     -------
     dict
-        ``x`` (input channels), ``ing`` (ingredients) and ``y`` (labels), each with the voxels of all
+        ``x`` (features, body_sdf, height), ``ing`` (ingredients) and ``y`` (labels), each with the voxels of all
         stores along the last axis; ``channels`` and ``classes`` (names); and ``ncase`` (number of stores).
     """
     paths = stores(out)
@@ -374,14 +372,14 @@ def load_sample(out, per_run, max_runs=None, workers=8):
     return dict(x=x, ing=ing, y=y, channels=parts[0][3], classes=parts[0][4], ncase=len(runs))
 
 
-NAMES = {"u": "u / U∞", "v": "v / U∞", "w": "w / U∞", "Cp": "C_p",
-         "body_proximity": "body proximity", "ground_proximity": "ground proximity"}
-LIMS = {"u": (-0.6, 1.5), "v": (-0.6, 0.6), "w": (-0.6, 0.6), "Cp": (-1.2, 1.05),
-        "body_proximity": (0.0, 1.0), "ground_proximity": (0.0, 1.0)}
+CHANNELS = ["lambda2", "Q", "omega_mag", "body_sdf", "height"]  # the rows of the sample's ``x``
+NAMES = {"lambda2": "λ₂*", "Q": "Q*", "omega_mag": "|ω|*", "body_sdf": "body sdf / H", "height": "height / H"}
+LIMS = {"lambda2": (-20.0, 20.0), "Q": (-20.0, 20.0), "omega_mag": (0.0, 20.0),
+        "body_sdf": (0.0, 4.0), "height": (0.0, 2.0)}
 
 
 def fig_hist(s, fig_dir):
-    """Plot the distribution of each input channel, by label class.
+    """Plot the distribution of each feature, ``body_sdf`` and ``height``, by label class.
 
     One panel per channel, with a density histogram per class and for the voxels without a label, on a
     log scale. Values are clipped to the channel's range in ``LIMS``. Writes ``feature_hist_by_class.png``.
@@ -427,7 +425,7 @@ def fig_hist(s, fig_dir):
 
 
 def fig_corr(s, fig_dir):
-    """Plot the Spearman rank correlation of the inputs, the ingredients and the labels.
+    """Plot the Spearman rank correlation of the features, the ingredients and the labels.
 
     Uses a random subsample of at most 2M voxels (seed 0). A column that is constant over the subsample,
     such as a class that never occurs, gives NaN. Writes ``correlation_heatmap.png`` and
@@ -465,8 +463,8 @@ def fig_corr(s, fig_dir):
                     color=INK if abs(r[i, j]) < 0.6 else SURF)
     for p in [len(channels) - 0.5, len(channels) + len(INGREDIENTS) - 0.5]:
         ax.axhline(p, color=SURF, linewidth=3); ax.axvline(p, color=SURF, linewidth=3)
-    ax.set_xlabel("inputs  |  label ingredients  |  labels")
-    ax.set_ylabel("labels  |  label ingredients  |  inputs")  # rotated label reads bottom-to-top
+    ax.set_xlabel("features  |  label ingredients  |  labels")
+    ax.set_ylabel("labels  |  label ingredients  |  features")  # rotated label reads bottom-to-top
     cb = fig.colorbar(im, ax=ax, shrink=0.8)
     cb.set_label("Spearman rank correlation")
     ax.set_title(f"Spearman correlation ({len(k)/1e6:.1f}M random fluid voxels, {s['ncase']} runs)")

@@ -17,16 +17,15 @@ N = 40  # voxels per side: smaller than a patch, so every patch is partly zero p
 
 def write_store(path, rng, n_vortex):
     """A store with a body block, `n_vortex` vortex voxels and 60 shear-layer voxels."""
-    inputs = rng.normal(size=(6, N, N, N)).astype(np.float32)
-    inputs[4] = 0.0
-    inputs[4, 15:20, 15:20, 15:20] = 1.5  # the body
-    inputs[5] = np.maximum(0, 1 - np.arange(N) / 32)[None, None, :]  # ground_proximity from the height
+    body_sdf = np.full((N, N, N), 1.0, np.float32)
+    body_sdf[15:20, 15:20, 15:20] = -0.1  # the body
+    height = np.broadcast_to(np.arange(N, dtype=np.float32) / 32, (N, N, N)).copy()
     labels = np.zeros((2, N, N, N), np.uint8)
     for channel, count in enumerate((n_vortex, 60)):
         labels[channel].flat[rng.choice(N**3, count, replace=False)] = 1
     features = rng.normal(size=(3, N, N, N)).astype(np.float32)
     save_case_zarr(path, ImageSpec((0, 0, 0), 1 / 32, (N, N, N)),
-                   {"inputs": inputs, "labels": labels, "features": features}, {}, {})
+                   {"features": features, "labels": labels, "body_sdf": body_sdf, "height": height}, {}, {})
 
 
 @pytest.fixture

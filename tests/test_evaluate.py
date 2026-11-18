@@ -32,12 +32,12 @@ def test_metrics_match_hand_built_masks():
 
 def test_score_counts_each_region_and_pools_runs():
     shape = (8, 8, 8)
-    core, proximity = np.ones(shape, bool), np.zeros(shape)
-    proximity[:4] = 1.0  # the first half is near the body, the rest is beyond 4 H
+    core, sdf = np.ones(shape, bool), np.full(shape, 5.0)
+    sdf[:4] = 0.1  # the first half is near the body, the rest is beyond 4 H
     ref, pred = np.zeros(shape, np.uint8), np.zeros(shape, np.uint8)
     ref[2:6] = 1  # vortex over x = 2..5
     pred[:6] = 1  # the net's vortex also covers x = 0..1
-    s = score(pred, ref, core, proximity)
+    s = score(pred, ref, core, sdf)
     assert [s[r]["vortex"]["inter"] for r in ("all", "near_body", "far")] == [4 * 64, 2 * 64, 2 * 64]
     assert pool([s, s])["all"]["vortex"]["inter"] == 2 * s["all"]["vortex"]["inter"]
     assert s["all"]["shear_layer"]["ref"] == 0

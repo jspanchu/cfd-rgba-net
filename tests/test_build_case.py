@@ -14,7 +14,6 @@ from vtkmodules.vtkFiltersSources import vtkSphereSource
 from vtkmodules.vtkIOGeometry import vtkSTLWriter
 from vtkmodules.vtkIOXML import vtkXMLUnstructuredGridWriter
 
-from cfd_rgba_net.baseline import grid_features
 from cfd_rgba_net.build_case import build_case, read_geo_parameters
 from cfd_rgba_net.config import CaseConfig, Contract, LabelRules
 
@@ -101,17 +100,13 @@ def test_build_case_refuses_a_grid_over_max_voxels(tmp_path):
     assert not (out / "synthetic_run1.zarr").exists()
 
 
-@pytest.mark.parametrize("contract,nu,match", [
-    (replace(CONTRACT, channels=("u",)), 1.0e-5, "channels"),
-    (CONTRACT, 0.0, "flow.nu"),
-])
-def test_build_case_rejects_inconsistent_settings_before_reading_any_file(tmp_path, contract, nu, match):
+def test_build_case_rejects_a_nonpositive_viscosity_before_reading_any_file(tmp_path):
     """The data directory is empty: a ValueError, not a FileNotFoundError, shows nothing was read."""
     (tmp_path / "synthetic.yaml").write_text(DATASET_YAML)
     cfg = CaseConfig.load(tmp_path / "synthetic.yaml")
-    cfg = replace(cfg, flow=replace(cfg.flow, nu=nu))
-    with pytest.raises(ValueError, match=match):
-        build_case(cfg, 1, tmp_path, tmp_path / "out", contract, LabelRules.load(), log=lambda m: None)
+    cfg = replace(cfg, flow=replace(cfg.flow, nu=0.0))
+    with pytest.raises(ValueError, match="flow.nu"):
+        build_case(cfg, 1, tmp_path, tmp_path / "out", CONTRACT, LabelRules.load(), log=lambda m: None)
 
 
 def test_read_geo_parameters(tmp_path):
@@ -142,19 +137,13 @@ def case(tmp_path_factory):
 def test_store_layout_and_metadata(case):
     store, m = case.store, dict(case.store.attrs)
     assert not (case.out / "synthetic_run1.zarr.tmp").exists()
-    assert set(store.array_keys()) == {"inputs", "labels", "features"}  # no 0/1 body or fluid mask: the body is b > 1
-    assert store["inputs"].shape[0] == 6 and store["inputs"].dtype == np.float32
-    assert store["inputs"].chunks == (6, 64, 64, 64)
-    assert m["channel_names"] == ["u", "v", "w", "Cp", "body_proximity", "ground_proximity"]
+    assert set(store.array_keys()) == {"features", "labels", "body_sdf", "height"}  # no 0/1 body or fluid mask
+    assert store["features"].shape[0] == 3 and store["features"].dtype == np.float32
+    assert store["features"].chunks == (3, 64, 64, 64)
+    assert store["body_sdf"].shape == store["height"].shape == store["labels"].shape[1:]
     assert m["class_names"] == ["vortex", "shear_layer"]
     assert set(store["ingredients"].array_keys()) == {"Q_nd", "lambda2_nd", "omega_mag_nd", "core"}
     assert abs(m["geometry"]["H"] - 0.4) < 1e-3                  # the sphere's diameter
-
-
-def test_features_come_from_the_stored_inputs_alone(case):
-    # what scripts/ahmedml/add_features.py relies on to update stores built before the features existed
-    x = case.store["inputs"][...]
-    np.testing.assert_array_equal(case.store["features"][...], grid_features(x[:3], x[4] < 1, 1 / CONTRACT.n_per_H))
 
 
 def test_provenance_records_versions_and_input_hashes(case):
@@ -164,7 +153,7 @@ def test_provenance_records_versions_and_input_hashes(case):
 
 
 def test_vti_files_are_written_on_request(case):
-    for f in ("inputs", "ingredients", "labels"):
+    for f in ("features", "ingredients", "labels"):
         assert (case.out / f"synthetic_run1_{f}.vti").exists()
 
 
@@ -174,27 +163,22 @@ def test_grid_fills_the_mesh_domain_just_inside_its_faces(case):
     assert -1.0 < g["origin"][0] < -1.0 + 1e-3 and 0.0 < g["origin"][2] < 1e-3
 
 
-def test_body_proximity_marks_the_body_and_inputs_vanish_outside_the_fluid(case):
-    x = case.store["inputs"][...]
-    b = x[4]
-    assert b.min() == 0
-    # H = sphere diameter; sdf/H at the sphere center = -radius/H = -0.5, so b = 1 + 0.5 / 4 there
-    assert 1.11 < b.max() < 1.14
-    fluid = b < 1
-    assert (x[:4, ~fluid] == 0).all()
-    # body voxels are inside the mesh here (immersed boundary), but the STL mask removes them from the fluid
+def test_body_sdf_is_negative_exactly_in_the_body(case):
+    sdf = case.store["body_sdf"][...]
+    # H = sphere diameter; sdf/H at the sphere center = -radius/H = -0.5
+    assert -0.51 < sdf.min() < -0.45
     voxels = case.meta["checks"]["voxels"]
-    assert voxels["n_in_mesh_and_body"] > 0 and voxels["proximity"]["n_body_gt1_not_body"] == 0
-    np.testing.assert_allclose(x[0][b < 0.75], 1.0, atol=1e-5)    # u / U_inf more than 1 H from the body
+    # body voxels are inside the mesh here (immersed boundary), but the STL mask removes them from the fluid
+    assert voxels["n_in_mesh_and_body"] > 0 and voxels["geometry"]["n_sdf_neg_not_body"] == 0
 
 
-def test_ground_proximity_is_a_function_of_the_height_only(case):
-    """Ground at z = 0 and H = 0.4: g = 1 - z/H on the layers, 0 from z = H up."""
-    gp = case.store["inputs"][5]
+def test_height_is_a_function_of_the_up_axis_only(case):
+    """Ground at z = 0 and H = 0.4: the height is z / H on the layers."""
+    h = case.store["height"][...]
     g = case.meta["grid"]
-    z = g["origin"][2] + float(g["dx"]) * np.arange(gp.shape[2])
-    np.testing.assert_allclose(gp[0, 0], np.maximum(0, 1 - z / case.meta["geometry"]["H"]), atol=1e-6)
-    assert (gp == gp[:1, :1, :]).all()
+    z = g["origin"][2] + float(g["dx"]) * np.arange(h.shape[2])
+    np.testing.assert_allclose(h[0, 0], z / case.meta["geometry"]["H"], atol=1e-5)
+    assert (h == h[:1, :1, :]).all()
 
 
 def test_vortex_labels_hug_the_vortex_axis(case):

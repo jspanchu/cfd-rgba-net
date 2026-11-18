@@ -2,7 +2,8 @@
 Voxel-grid baseline: label rules v1 applied to finite-difference gradients of the grid's own u, v, w.
 
 It needs no training. The net must beat it (the baseline gate in the roadmap). The same gradients give the
-net's inputs, ``grid_features``. Both run in torch, on the GPU when there is one.
+net's inputs, ``grid_features``, and the baseline thresholds those. ``grid_features`` runs in torch, on the
+GPU when there is one.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import math
 import numpy as np
 import torch
 
-from .config import Contract, LabelRules
+from .config import LabelRules
 
 # Channels of ``grid_features`` and of the stores' ``features`` array. Computed on the voxel grid, unlike the
 # ingredients of the same names, which come from the native mesh and define the labels.
@@ -170,7 +171,7 @@ def grid_features(u: np.ndarray, fluid: np.ndarray, h: float, device: torch.devi
     u : numpy.ndarray
         Velocity / U_inf, ``(3, nx, ny, nz)``.
     fluid : numpy.ndarray
-        Bool ``(nx, ny, nz)``, the voxels inside the mesh and outside the body (``body_proximity < 1``).
+        Bool ``(nx, ny, nz)``, the voxels inside the mesh and outside the body (``body_sdf > 0``).
     h : float
         The voxel size in units of H, ``1 / n_per_H``, so the quantities are dimensionless.
     device : torch.device or None, optional
@@ -191,37 +192,25 @@ def grid_features(u: np.ndarray, fluid: np.ndarray, h: float, device: torch.devi
     return torch.stack([lambda2_closed_form(G), Q, omega]).reshape(3, *fluid.shape).cpu().numpy()
 
 
-def baseline_classes(x: np.ndarray, core: np.ndarray, contract: Contract, rules: LabelRules,
-                     device: torch.device | None = None) -> np.ndarray:
-    """Label a case with the rules, from the gradients of its own grid.
+def baseline_classes(features: np.ndarray, core: np.ndarray, rules: LabelRules) -> np.ndarray:
+    """Label a case with the rules, from the features of its own grid.
 
     Parameters
     ----------
-    x : numpy.ndarray
-        The unscaled inputs of a store, ``(6, nx, ny, nz)``.
+    features : numpy.ndarray
+        The store's ``features``, ``(3, nx, ny, nz)``: lambda2*, Q* and |omega|*, in the order of
+        ``FEATURE_NAMES``.
     core : numpy.ndarray
         Bool ``(nx, ny, nz)``, the voxels where labels may be set.
-    contract : Contract
-        The input contract. Gives the voxel size, ``1 / n_per_H`` in units of H, so the gradients are
-        dimensionless like the reference's.
     rules : LabelRules
         The label thresholds.
-    device : torch.device or None, optional
-        Where the arithmetic runs. ``None`` means ``default_device()``.
 
     Returns
     -------
     numpy.ndarray
         Uint8 ``(nx, ny, nz)``: 0 none, 1 vortex, 2 shear layer.
     """
-    device = device or default_device()
-    u = torch.from_numpy(np.ascontiguousarray(x[:3], np.float32)).to(device)
-    fluid = torch.from_numpy(np.ascontiguousarray(x[4] < 1)).to(device)
-    G = velocity_gradient(u, fluid, torch.from_numpy(np.ascontiguousarray(core)).to(device), 1 / contract.n_per_H)
-    del u
-    Q, omega = q_and_vorticity(G)
-    vortex = (lambda2_closed_form(G) < -rules.tau_lambda2) & (Q > 0)
+    lam2, Q, omega = features
+    vortex = (lam2 < -rules.tau_lambda2) & (Q > 0)
     shear = (omega > rules.tau_omega) & ~vortex
-    classes = np.zeros(core.shape, np.uint8)
-    classes[core] = (vortex.to(torch.uint8) + 2 * shear.to(torch.uint8)).cpu().numpy()
-    return classes
+    return ((vortex.astype(np.uint8) + 2 * shear.astype(np.uint8)) * core).astype(np.uint8)

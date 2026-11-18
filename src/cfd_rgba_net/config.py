@@ -53,7 +53,7 @@ def _load(path: Path) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class Contract:
-    """The input contract: what the model's input channels mean. Fixed by the model, not by the user.
+    """The input contract: the voxel size and the signed-distance band. Fixed by the model, not by the user.
 
     Attributes
     ----------
@@ -61,21 +61,12 @@ class Contract:
         Version of the contract. Must equal ``cfd_rgba_net.CONTRACT_VERSION``.
     n_per_H : int
         Voxels per reference length H, so the voxel size is ``dx = H / n_per_H``.
-    channels : tuple[str, ...]
-        Names of the input channels, in order.
-    body_proximity_range_H : float
-        Distance from the body, in units of H, at which ``body_proximity`` reaches 0.
-    ground_proximity_range_H : float
-        Height above the ground, in units of H, at which ``ground_proximity`` reaches 0.
     sdf_exact_band_H : float
         The signed distance to the body is exact within this distance, in units of H, of the body's
         bounding box, and a distance transform beyond it.
     """
     contract_version: str
     n_per_H: int
-    channels: tuple[str, ...]
-    body_proximity_range_H: float
-    ground_proximity_range_H: float
     sdf_exact_band_H: float
 
     @classmethod
@@ -102,9 +93,7 @@ class Contract:
         # check first: a file of another version may not have the keys read below
         if version != CONTRACT_VERSION:
             raise ValueError(f"contract file is v{version}, code is v{CONTRACT_VERSION}")
-        return cls(version, int(d["n_per_H"]), tuple(d["channels"]),
-                   float(d["body_proximity_range_H"]), float(d["ground_proximity_range_H"]),
-                   float(d["sdf_exact_band_H"]))
+        return cls(version, int(d["n_per_H"]), float(d["sdf_exact_band_H"]))
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to a plain dict that serializes to JSON.
@@ -112,11 +101,9 @@ class Contract:
         Returns
         -------
         dict[str, Any]
-            The fields by name, with ``channels`` as a list.
+            The fields by name.
         """
-        d = asdict(self)
-        d["channels"] = list(self.channels)
-        return d
+        return asdict(self)
 
 
 @dataclass(frozen=True)

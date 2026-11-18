@@ -10,7 +10,7 @@ source .venv/bin/activate
 ## Layout
 
 ```
-configs/contract_v1.yaml        input contract v1.0: n_per_H, channels, proximity ranges, SDF band (units of H)
+configs/contract_v1.yaml        input contract v1.0: n_per_H and the SDF band (units of H)
 configs/label_rules_v1.yaml     label rules v1 thresholds (units of H)
 configs/datasets/*.yaml         per-dataset case parameters: files, field names and source (point or cell), U_inf, frame, ground
 src/cfd_rgba_net/
@@ -30,17 +30,7 @@ scripts/ahmedml/
     fix_wedges.py               rewrites the AhmedML VTUs with VTK's wedge point order (source of jspanchu/ahmedml)
     figures.py                  progress figures from the ahmedml_run<N>.zarr stores
     make_splits.py              assigns every run to a split (configs/splits/ahmedml_v1.csv)
-    compute_scales.py           input scales of the train split, for configs/contract_v1.yaml
-    add_features.py             adds the `features` array to stores built before build_case wrote it
 ```
-
-Input channels (contract v1.0) are `u, v, w` (velocity / U_inf along the mesh's own x, y, z axes), `Cp`,
-and two proximity channels in place of a 0/1 body mask (sdf is the signed distance to the body, negative
-inside; it is not an input itself):
-
-- `body_proximity` b = max(0, 1 − sdf / (4 H)): 1 on the body surface, 0 at 4 H and beyond. Inside the body
-  the line continues (sdf < 0), so b > 1 inside and b < 1 outside; the fluid is b < 1.
-- `ground_proximity` g = max(0, 1 − h / H), h the height above the ground: 1 on the ground, 0 at 1 H and above.
 
 The grid has dx = H / 32, is aligned with the mesh axes and fills the dataset's domain (`domain` in its
 YAML, default the mesh bounds). There is no axis convention: the flow may run along any mesh axis, in
@@ -60,15 +50,16 @@ cfd-rgba-net-batch --dataset windsorml --runs 0-349 --out /data2/cfd-rgba-net-da
 ```
 
 Each case writes one Zarr v3 store, `<dataset>_run<N>.zarr` (64^3 chunks in 256^3 shards, Blosc zstd):
-`inputs` (6, nx, ny, nz) float32 (u, v, w, Cp, body_proximity, ground_proximity), `labels`
-(2, nx, ny, nz) uint8 (vortex, shear_layer), `features` (3, nx, ny, nz) float32 (lambda2*, Q*, |omega|* from
-finite differences of the grid's own u, v, w: the net's inputs) and an `ingredients/` group (the same three
-quantities on the native mesh, which define the labels, and the core), with the case config, contract,
+`features` (3, nx, ny, nz) float32 (lambda2*, Q*, |omega|* from finite differences of the grid's own velocity:
+the net's inputs), `labels` (2, nx, ny, nz) uint8 (vortex, shear_layer), `body_sdf` (nx, ny, nz) float32 (signed
+distance to the body in units of H, negative inside), `height` (nx, ny, nz) float32 (height above the ground in
+units of H) and an `ingredients/` group (the same three quantities on the native mesh, which define the
+labels, and the core), with the case config, contract,
 label rules, geometry, sanity checks, and the git commit and SHA-256 of every input file in the store's
 attributes. `--save-vti` adds `.vti` files for
-viewing. There is no stored fluid mask: take b < 1. It also counts the few voxels outside both the mesh and
-the body (`checks.voxels.n_not_in_mesh_nor_body`, at most 84 per AhmedML case), where u, v, w and Cp are 0
-and the labels are 0.
+viewing. There is no stored fluid mask: take `body_sdf > 0`. The attributes also count the few voxels outside
+both the mesh and the body (`checks.voxels.n_not_in_mesh_nor_body`, at most 84 per AhmedML case), where the
+features and the labels are 0.
 
 The WindsorML and DrivAerML configs are not yet verified on downloaded cases; see the TODOs in them.
 

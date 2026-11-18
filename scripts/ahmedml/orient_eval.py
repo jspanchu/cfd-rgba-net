@@ -6,7 +6,7 @@ cube. A net that was trained without them scores well on the stored orientation 
     python -I scripts/ahmedml/orient_eval.py --stores /data/cfd-rgba-net-data/ahmedML/out_v1 \\
         --out results/orient.json runs/r0_seed1/last.pt runs/r2_noaug/last.pt
 
-Each case's features, inputs, labels and core are re-oriented together; the features are invariant under the
+Each case's features, signed distance, height, labels and core are re-oriented together; the features are invariant under the
 orientations, so they move with the voxels only (as in ``loader.PatchDataset.sample_patch``), and the reference
 stays exact. Scores come from ``evaluate.predict``
 as it is now, with the zero margin and bfloat16 windows: they differ from older runs of this script, which
@@ -49,8 +49,8 @@ def reorient(a: np.ndarray, perm: tuple[int, ...], sign: tuple[int, ...]) -> np.
     Parameters
     ----------
     a : numpy.ndarray
-        Array shaped ``(..., nx, ny, nz)``: features, inputs or reference labels. Only the voxels move, so
-        the velocity components of the inputs do not follow the axes; here only proximities are read from them.
+        Array shaped ``(..., nx, ny, nz)``: features, signed distance, height or reference labels. Only the
+        voxels move.
     perm : tuple[int, ...]
         New axis ``i`` is old axis ``perm[i]``.
     sign : tuple[int, ...]
@@ -91,14 +91,14 @@ def main():
     start = time.time()
     for run in runs:
         store = zarr.open_group(store_path(ds, args.stores, run), mode="r")
-        f0, x0, labels = store["features"][:], store["inputs"][:], store["labels"][:]
+        f0, sdf0, h0, labels = (store[k][:] for k in ("features", "body_sdf", "height", "labels"))
         ref0 = labels[0] + 2 * labels[1]
         for name, (perm, sign) in ORIENTATIONS.items():
-            f, x, ref = (reorient(a, perm, sign) for a in (f0, x0, ref0))
-            core = core_mask(x[4] < 1, (1 - x[5]) * contract.ground_proximity_range_H, rules, contract.n_per_H)[1]
+            f, sdf, h, ref = (reorient(a, perm, sign) for a in (f0, sdf0, h0, ref0))
+            core = core_mask(sdf > 0, h, rules, contract.n_per_H)[1]
             for ckpt, model in models.items():
                 p = predict(model, torch.from_numpy(f), device) * torch.from_numpy(core).to(device)
-                scores[ckpt][name].append(score(p.argmax(0).cpu().numpy(), ref, core, x[4], surface_dice=False))
+                scores[ckpt][name].append(score(p.argmax(0).cpu().numpy(), ref, core, sdf, surface_dice=False))
         print(f"run {run} done, {time.time() - start:.0f} s", flush=True)
 
     summary = {c: {o: [round(metrics(pool(v)["all"][k])["iou"], 4) for k in CLASS_NAMES] for o, v in d.items()}
