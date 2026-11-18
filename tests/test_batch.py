@@ -1,4 +1,5 @@
-"""Verification: the run specification, and which runs the batch driver builds, keeps and reports."""
+"""Verification: the run specification, and which runs the batch driver builds,
+keeps and reports."""
 
 import pytest
 
@@ -17,7 +18,9 @@ flow:
 """
 
 
-def test_parse_runs_reads_lists_ranges_and_csv_columns_and_drops_duplicates(tmp_path):
+def test_parse_runs_reads_lists_ranges_and_csv_columns_and_drops_duplicates(
+    tmp_path,
+):
     assert parse_runs("0-3,10") == [0, 1, 2, 3, 10]
     assert parse_runs("1,2-3,3") == [1, 2, 3]
     f = tmp_path / "runs.csv"
@@ -28,9 +31,16 @@ def test_parse_runs_reads_lists_ranges_and_csv_columns_and_drops_duplicates(tmp_
 
 
 @pytest.mark.parametrize("keep,kept", [(False, {3}), (True, {2, 3, 4})])
-def test_main_skips_built_runs_reports_failures_and_cleans_up(tmp_path, monkeypatch, keep, kept):
-    """Run 1 is already built, run 3 fails: only 2-4 are built, the exit code is 1, and a failed run's files stay."""
-    dataset, out, work = tmp_path / "t.yaml", tmp_path / "out", tmp_path / "work"
+def test_main_skips_built_runs_reports_failures_and_cleans_up(
+    tmp_path, monkeypatch, keep, kept
+):
+    """Run 1 is already built, run 3 fails: only 2-4 are built, the exit code is
+    1, and a failed run's files stay."""
+    dataset, out, work = (
+        tmp_path / "t.yaml",
+        tmp_path / "out",
+        tmp_path / "work",
+    )
     dataset.write_text(DATASET_YAML)
     (out / "t_run1.zarr").mkdir(parents=True)
     built = []
@@ -44,7 +54,16 @@ def test_main_skips_built_runs_reports_failures_and_cleans_up(tmp_path, monkeypa
 
     monkeypatch.setattr(batch, "download", fake_download)
     monkeypatch.setattr(batch, "build", fake_build)
-    argv = ["--dataset", str(dataset), "--runs", "1-4", "--out", str(out), "--work", str(work)]
+    argv = [
+        "--dataset",
+        str(dataset),
+        "--runs",
+        "1-4",
+        "--out",
+        str(out),
+        "--work",
+        str(work),
+    ]
     code = batch.main(argv + (["--keep"] if keep else []))
 
     assert sorted(built) == [2, 3, 4]

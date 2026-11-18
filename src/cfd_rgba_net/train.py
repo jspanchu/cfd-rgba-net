@@ -1,13 +1,13 @@
-"""Training loop with the Phase 1.1 starting hyperparameters (nnU-Net defaults for 3D UNets)."""
+"""Training loop with nnU-Net's 3D UNet defaults as Phase 1.1 settings."""
 
 from __future__ import annotations
 
 import json
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 import torch
@@ -24,15 +24,20 @@ class TrainConfig:
     momentum: float = 0.99
     weight_decay: float = 3e-5
     clip_norm: float = 12.0
-    steps_per_epoch: int = 250  # an epoch is a fixed number of steps, not a pass over the data
+    steps_per_epoch: int = (
+        250  # an epoch is a fixed number of steps, not a pass over the data
+    )
     max_epochs: int = 500
     patience: int = 50  # epochs without a better validation IoU before stopping
     val_every: int = 10  # epochs
     seed: int = 0
     workers: int = 4
     compile: bool = False  # torch.compile the training forward pass
-    start_epoch: int = 0  # epochs already trained, when the model holds the weights of an earlier run
-    warmup_epochs: int = 0  # the learning rate rises linearly from 0 over these epochs, counted from epoch 1
+    # epochs already trained, when the model holds the weights of an earlier run
+    start_epoch: int = 0
+    # the learning rate rises linearly from 0 over these epochs, counted from
+    # epoch 1
+    warmup_epochs: int = 0
 
 
 def seed_everything(seed: int) -> None:
@@ -56,27 +61,30 @@ def train(
     validate: Callable[[nn.Module], tuple[float, float]],
     out: Path,
 ) -> None:
-    """Train until the validation IoU stops improving or ``cfg.max_epochs`` is reached.
+    """Train until the validation IoU stops improving or ``cfg.max_epochs``.
 
-    Runs on one process, or under ``torchrun`` with one process per GPU when the process group is
-    initialised. Rank 0 validates, logs and saves; the other ranks wait for its decision to stop.
+    Runs on one process, or under ``torchrun`` with one process per GPU when the
+    process group is initialised. Rank 0 validates, logs and saves; the other
+    ranks wait for its decision to stop.
 
     Parameters
     ----------
     model : torch.nn.Module
         The network, already on its device.
     dataset : torch.utils.data.IterableDataset
-        Yields patches with ``inputs``, ``labels`` and ``core``. Its ``seed`` is set to ``cfg.seed + rank``,
-        so that ranks draw different patches.
+        Yields patches with ``inputs``, ``labels`` and ``core``. Its ``seed`` is
+        set to ``cfg.seed + rank``, so that ranks draw different patches.
     loss_fn : callable
         ``SegmentationLoss``, returning the total loss and its logged terms.
     cfg : TrainConfig
-        The hyperparameters. To resume, load the earlier weights into ``model`` and set ``start_epoch`` to the
-        epochs they were trained for: the epoch count and the learning rate continue from there, but the
-        optimizer's momentum starts empty.
+        The hyperparameters. To resume, load the earlier weights into ``model``
+        and set ``start_epoch`` to the epochs they were trained for: the epoch
+        count and the learning rate continue from there, but the optimizer's
+        momentum starts empty.
     validate : callable
-        Takes the model in eval mode and returns the validation IoU of vortex and shear layer.
-        Placeholder until the task 6 harness exists; task 7 wires it in, together with a command line.
+        Takes the model in eval mode and returns the validation IoU of vortex
+        and shear layer. Placeholder until the task 6 harness exists; task 7
+        wires it in, together with a command line.
     out : pathlib.Path
         The folder for ``last.pt`` and ``best.pt``, the model weights.
     """
@@ -84,38 +92,68 @@ def train(
     device = next(model.parameters()).device
     cuda = device.type == "cuda"
     dataset.seed = cfg.seed + rank
-    net = DistributedDataParallel(model, device_ids=[device.index]) if dist.is_initialized() else model
-    # Only the training forward is compiled: validation calls ``model`` with other shapes, which would recompile.
+    net = (
+        DistributedDataParallel(model, device_ids=[device.index])
+        if dist.is_initialized()
+        else model
+    )
+    # Only the training forward is compiled: validation calls ``model`` with
+    # other shapes, which would recompile.
     forward = torch.compile(net) if cfg.compile else net
-    opt = torch.optim.SGD(net.parameters(), cfg.lr, cfg.momentum, nesterov=True, weight_decay=cfg.weight_decay)
-    # the run length is unknown, so the decay follows the cap; a resumed run continues the earlier run's decay
+    opt = torch.optim.SGD(
+        net.parameters(),
+        cfg.lr,
+        cfg.momentum,
+        nesterov=True,
+        weight_decay=cfg.weight_decay,
+    )
+    # the run length is unknown, so the decay follows the cap; a resumed run
+    # continues the earlier run's decay
     total_steps = cfg.max_epochs * cfg.steps_per_epoch
     done_steps = cfg.start_epoch * cfg.steps_per_epoch
     warmup_steps = cfg.warmup_epochs * cfg.steps_per_epoch
 
     def lr_factor(step: int) -> float:
         done = done_steps + step
-        ramp = min(1.0, (done + 1) / warmup_steps) if warmup_steps else 1.0  # + 1: the first step is not at 0
+        ramp = (
+            min(1.0, (done + 1) / warmup_steps) if warmup_steps else 1.0
+        )  # + 1: the first step is not at 0
         return ramp * (1 - done / total_steps) ** 0.9
 
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_factor)
-    batches = iter(DataLoader(dataset, cfg.batch_size, num_workers=cfg.workers, pin_memory=cuda))
+    batches = iter(
+        DataLoader(
+            dataset, cfg.batch_size, num_workers=cfg.workers, pin_memory=cuda
+        )
+    )
     out.mkdir(parents=True, exist_ok=True)
     best, best_epoch = -1.0, 0
 
     for epoch in range(cfg.start_epoch + 1, cfg.max_epochs + 1):
         net.train()
-        loss_sum, terms_sum, start = 0.0, torch.zeros(3, device=device), time.time()
+        loss_sum, terms_sum, start = (
+            0.0,
+            torch.zeros(3, device=device),
+            time.time(),
+        )
         if cuda:
             torch.cuda.reset_peak_memory_stats(device)
         for _ in range(cfg.steps_per_epoch):
-            batch = {k: v.to(device, non_blocking=True) for k, v in next(batches).items()}
-            # bfloat16, not float16: instance norm of sparse features makes activations exceed the float16
-            # range (65,504), which turned the loss NaN after a few thousand steps. bfloat16 needs no scaler.
+            batch = {
+                k: v.to(device, non_blocking=True)
+                for k, v in next(batches).items()
+            }
+            # bfloat16, not float16: instance norm of sparse features makes
+            # activations exceed the float16 range (65,504), which turned the
+            # loss NaN after a few thousand steps. bfloat16 needs no scaler.
             with torch.autocast(device.type, torch.bfloat16, enabled=cuda):
                 logits = forward(batch["inputs"])
-            loss, terms = loss_fn(logits.float(), batch["labels"], batch["core"])
-            if not loss.isfinite():  # stop at once: every later step would be wasted
+            loss, terms = loss_fn(
+                logits.float(), batch["labels"], batch["core"]
+            )
+            if (
+                not loss.isfinite()
+            ):  # stop at once: every later step would be wasted
                 raise FloatingPointError(f"non-finite loss in epoch {epoch}")
             opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -123,16 +161,23 @@ def train(
             opt.step()
             sched.step()
             loss_sum, terms_sum = loss_sum + loss.item(), terms_sum + terms
-        log = {"epoch": epoch, "lr": sched.get_last_lr()[0], "loss": loss_sum / cfg.steps_per_epoch,
-               "terms": (terms_sum / cfg.steps_per_epoch).tolist(),
-               "steps_per_s": cfg.steps_per_epoch / (time.time() - start),
-               "peak_gpu_gib": torch.cuda.max_memory_allocated(device) / 2**30 if cuda else None}
+        log = {
+            "epoch": epoch,
+            "lr": sched.get_last_lr()[0],
+            "loss": loss_sum / cfg.steps_per_epoch,
+            "terms": (terms_sum / cfg.steps_per_epoch).tolist(),
+            "steps_per_s": cfg.steps_per_epoch / (time.time() - start),
+            "peak_gpu_gib": torch.cuda.max_memory_allocated(device) / 2**30
+            if cuda
+            else None,
+        }
 
         stop = torch.zeros(1, device=device)
         if rank == 0:
             if epoch % cfg.val_every == 0:
-                # The other ranks wait in the broadcast below, so a validation longer than the NCCL
-                # timeout (10 minutes by default) kills the run: raise the timeout if it does.
+                # The other ranks wait in the broadcast below, so a validation
+                # longer than the NCCL timeout (10 minutes by default) kills the
+                # run: raise the timeout if it does.
                 model.eval()
                 val_start = time.time()
                 log["val_iou"] = validate(model)

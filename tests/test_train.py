@@ -1,4 +1,5 @@
-"""Verification: a run resumed from saved weights continues the epoch count and the learning-rate decay."""
+"""Verification: a run resumed from saved weights continues the epoch count and
+the learning-rate decay."""
 
 import json
 
@@ -26,8 +27,11 @@ class Patches(IterableDataset):
 
     def __iter__(self):
         while True:
-            yield dict(inputs=torch.randn(3, 8, 8, 8), labels=torch.zeros(2, 8, 8, 8, dtype=torch.uint8),
-                       core=torch.ones(8, 8, 8, dtype=torch.bool))
+            yield {
+                "inputs": torch.randn(3, 8, 8, 8),
+                "labels": torch.zeros(2, 8, 8, 8, dtype=torch.uint8),
+                "core": torch.ones(8, 8, 8, dtype=torch.bool),
+            }
 
 
 def run(cfg, tmp_path, capsys):
@@ -37,16 +41,32 @@ def run(cfg, tmp_path, capsys):
 
 
 def test_resumed_run_continues_epochs_and_learning_rate(tmp_path, capsys):
-    base = dict(batch_size=2, steps_per_epoch=3, max_epochs=4, val_every=10, workers=0)
+    base = {
+        "batch_size": 2,
+        "steps_per_epoch": 3,
+        "max_epochs": 4,
+        "val_every": 10,
+        "workers": 0,
+    }
     whole = run(TrainConfig(**base), tmp_path / "whole", capsys)
-    resumed = run(TrainConfig(**base, start_epoch=2), tmp_path / "resumed", capsys)
+    resumed = run(
+        TrainConfig(**base, start_epoch=2), tmp_path / "resumed", capsys
+    )
 
     assert [log["epoch"] for log in resumed] == [3, 4]
     assert [log["lr"] for log in resumed] == [log["lr"] for log in whole[2:]]
 
 
-def test_warmup_ramps_the_learning_rate_then_rejoins_the_decay(tmp_path, capsys):
-    base = dict(batch_size=2, steps_per_epoch=3, max_epochs=4, val_every=10, workers=0)
+def test_warmup_ramps_the_learning_rate_then_rejoins_the_decay(
+    tmp_path, capsys
+):
+    base = {
+        "batch_size": 2,
+        "steps_per_epoch": 3,
+        "max_epochs": 4,
+        "val_every": 10,
+        "workers": 0,
+    }
     plain = run(TrainConfig(**base), tmp_path / "plain", capsys)
     warm = run(TrainConfig(**base, warmup_epochs=2), tmp_path / "warm", capsys)
 

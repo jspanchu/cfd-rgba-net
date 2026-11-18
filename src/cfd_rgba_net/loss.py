@@ -7,13 +7,18 @@ import torch.nn.functional as F
 from torch import nn
 
 
-def class_weights(fractions: tuple[float, float], w_max: float = 100.0) -> torch.Tensor:
-    """Inverse-frequency class weights, capped so that rare positives do not swamp the loss.
+def class_weights(
+    fractions: tuple[float, float], w_max: float = 100.0
+) -> torch.Tensor:
+    """Inverse-frequency class weights, capped against swamping the loss.
+
+    Capping keeps rare positives from swamping the loss.
 
     Parameters
     ----------
     fractions : tuple[float, float]
-        Fraction of core voxels labelled vortex and shear layer in the sampled train patches.
+        Fraction of core voxels labelled vortex and shear layer in the sampled
+        train patches.
     w_max : float
         Cap on a foreground weight.
 
@@ -31,7 +36,8 @@ class SegmentationLoss(nn.Module):
     Parameters
     ----------
     weights : torch.Tensor
-        Cross-entropy weights for none, vortex and shear layer, shape ``(3,)``; see ``class_weights``.
+        Cross-entropy weights for none, vortex and shear layer, shape ``(3,)``;
+        see ``class_weights``.
     eps : float
         Smoothing term of the Dice ratio.
     """
@@ -51,7 +57,8 @@ class SegmentationLoss(nn.Module):
         logits : torch.Tensor
             Class scores ``(N, 3, D, H, W)``, as ``UNet3D`` returns them.
         labels : torch.Tensor
-            Vortex and shear-layer masks, ``(N, 2, D, H, W)``, never both set at one voxel.
+            Vortex and shear-layer masks, ``(N, 2, D, H, W)``, never both set at
+            one voxel.
         core : torch.Tensor
             Bool mask of the voxels that count, ``(N, D, H, W)``.
 
@@ -60,17 +67,27 @@ class SegmentationLoss(nn.Module):
         torch.Tensor
             Scalar, the sum of the three terms.
         torch.Tensor
-            The terms for logging, detached, ``(3,)``: cross-entropy, then ``1 - Dice`` for vortex and for
-            shear layer.
+            The terms for logging, detached, ``(3,)``: cross-entropy, then ``1 -
+            Dice`` for vortex and for shear layer.
         """
-        target = (labels[:, 0] + 2 * labels[:, 1]).long()  # 0 none, 1 vortex, 2 shear layer
+        target = (
+            labels[:, 0] + 2 * labels[:, 1]
+        ).long()  # 0 none, 1 vortex, 2 shear layer
         n_core = core.sum().clamp(min=1)
-        ce = (F.cross_entropy(logits, target, weight=self.weights, reduction="none") * core).sum() / n_core
+        ce = (
+            F.cross_entropy(
+                logits, target, weight=self.weights, reduction="none"
+            )
+            * core
+        ).sum() / n_core
 
-        # Dice sums over the whole batch: a single random patch may hold no labelled voxel.
+        # Dice sums over the whole batch: a single random patch may hold no
+        # labelled voxel.
         p = logits.softmax(1) * core[:, None]
         y = F.one_hot(target, 3).movedim(-1, 1) * core[:, None]
         dims = (0, 2, 3, 4)
-        dice = (2 * (p * y).sum(dims) + self.eps) / (p.sum(dims) + y.sum(dims) + self.eps)
+        dice = (2 * (p * y).sum(dims) + self.eps) / (
+            p.sum(dims) + y.sum(dims) + self.eps
+        )
         terms = torch.stack([ce, *(1 - dice[1:])])
         return terms.sum(), terms.detach()

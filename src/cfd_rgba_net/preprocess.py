@@ -1,19 +1,25 @@
 """
-Native mesh -> the voxel grid's velocity, signed distance to the body and height above the ground. Shared by
-training-data generation and inference, so the net always sees features built the same way.
+Native mesh -> the voxel grid's velocity, signed distance to the body and height
+above the ground. Shared by training-data generation and inference, so the net
+always sees features built the same way.
 
     mesh  = read_volume(path, case_cfg.field_names())
-    prep  = prepare_mesh(mesh, case_cfg)              # select fields, non-dimensionalize, find the ground
-    body  = read_body(stl, case_cfg.body_scale, case_cfg.body_merge_tolerance)
-    geo   = case_geometry(body, prep.ground, case_cfg.reference_length, axis_of(case_cfg.flow.up_direction))
-    spec  = geo.image_spec(contract, case_cfg.domain or mesh.GetBounds(),
-                           case_cfg.floor_offset_H, case_cfg.grid_inset_H)   # the whole domain
-    image = resample(prep.mesh, spec)                 # point arrays on the voxel grid
-    grid  = assemble_grid(image, body, geo, spec, contract)   # u, body_sdf, height, fluid
+    prep  = prepare_mesh(mesh, case_cfg)              # select fields,
+    non-dimensionalize, find the ground body  = read_body(stl,
+    case_cfg.body_scale, case_cfg.body_merge_tolerance) geo   =
+    case_geometry(body, prep.ground, case_cfg.reference_length,
+    axis_of(case_cfg.flow.up_direction)) spec  = geo.image_spec(contract,
+    case_cfg.domain or mesh.GetBounds(),
+                           case_cfg.floor_offset_H, case_cfg.grid_inset_H)   #
+                           the whole domain
+    image = resample(prep.mesh, spec)                 # point arrays on the
+    voxel grid grid  = assemble_grid(image, body, geo, spec, contract)   # u,
+    body_sdf, height, fluid
 
-Nothing is rotated: the voxel grid and the velocity components use the mesh's own axes, whichever way
-the flow runs along them. The grid fills the dataset's domain; the up direction only sets H, the
-ground, the height above it and the floor exclusion.
+Nothing is rotated: the voxel grid and the velocity components use the mesh's
+own axes, whichever way the flow runs along them. The grid fills the dataset's
+domain; the up direction only sets H, the ground, the height above it and the
+floor exclusion.
 """
 
 from __future__ import annotations
@@ -24,8 +30,12 @@ from pathlib import Path
 
 import numpy as np
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
-from vtkmodules.vtkCommonDataModel import (vtkGenericCell, vtkPolyData, vtkStaticCellLocator,
-                                           vtkUnstructuredGrid)
+from vtkmodules.vtkCommonDataModel import (
+    vtkGenericCell,
+    vtkPolyData,
+    vtkStaticCellLocator,
+    vtkUnstructuredGrid,
+)
 from vtkmodules.vtkFiltersCore import vtkCellDataToPointData, vtkResampleToImage
 from vtkmodules.vtkIOXML import vtkXMLUnstructuredGridReader
 
@@ -33,20 +43,27 @@ from .config import FIELD_SOURCES, CaseConfig, Contract, VectorField, axis_of
 from .geometry import CaseGeometry, ImageSpec, signed_distance
 
 # Array names on the prepared mesh.
-U_ND = "U_nd"      # point data, velocity / U_inf, mesh axes
-CP = "Cp"          # point data; only the ingredients' check against the dataset's own Cp reads it
-U_CELL = "U_cell"  # cell data, velocity / U_inf (gradients only); present when the mesh has cell velocity
+U_ND = "U_nd"  # point data, velocity / U_inf, mesh axes
+# point data; only the ingredients' check against the dataset's own Cp reads it
+CP = "Cp"
+# cell data, velocity / U_inf (gradients only); present when the mesh has
+# cell velocity
+U_CELL = "U_cell"
 
-# vtkGenericCell.GetPointId / FindCell weights: the most points a cell may have in probe_point.
+# vtkGenericCell.GetPointId / FindCell weights: the most points a cell may have
+# in probe_point.
 MAX_CELL_POINTS = 64
 
 
-def read_volume(path: str | Path, arrays: set[str] | None = None) -> vtkUnstructuredGrid:
+def read_volume(
+    path: str | Path, arrays: set[str] | None = None
+) -> vtkUnstructuredGrid:
     """Read a volume mesh from a ``.vtu`` file.
 
-    With ``arrays``, the reader loads only those point and cell arrays: ``UpdateInformation`` reads just
-    the XML header, which fills the reader's array selections, and the others are switched off before
-    ``Update``, so their data is never loaded.
+    With ``arrays``, the reader loads only those point and cell arrays:
+    ``UpdateInformation`` reads just the XML header, which fills the reader's
+    array selections, and the others are switched off before ``Update``, so
+    their data is never loaded.
 
     Parameters
     ----------
@@ -73,8 +90,13 @@ def read_volume(path: str | Path, arrays: set[str] | None = None) -> vtkUnstruct
     reader = vtkXMLUnstructuredGridReader(file_name=str(path))
     if arrays is not None:
         reader.UpdateInformation()
-        for sel in (reader.GetPointDataArraySelection(), reader.GetCellDataArraySelection()):
-            for name in [sel.GetArrayName(i) for i in range(sel.GetNumberOfArrays())]:
+        for sel in (
+            reader.GetPointDataArraySelection(),
+            reader.GetCellDataArraySelection(),
+        ):
+            for name in [
+                sel.GetArrayName(i) for i in range(sel.GetNumberOfArrays())
+            ]:
                 sel.SetArraySetting(name, int(name in arrays))
     reader.Update()
     ug = reader.GetOutput()
@@ -85,7 +107,7 @@ def read_volume(path: str | Path, arrays: set[str] | None = None) -> vtkUnstruct
 
 @dataclass
 class PreparedMesh:
-    """The mesh with the model's fields, and the reference values they were scaled with.
+    """The mesh with the model's fields and the reference values of the scaling.
 
     Attributes
     ----------
@@ -94,7 +116,8 @@ class PreparedMesh:
     U_inf : float
         Freestream speed. From the config, or read at ``flow.reference_probe``.
     p_inf : float
-        Freestream pressure. From the config, or read at ``flow.reference_probe``.
+        Freestream pressure. From the config, or read at
+        ``flow.reference_probe``.
     ground : float
         Ground position: a coordinate along the up axis.
     velocity_source : str
@@ -102,6 +125,7 @@ class PreparedMesh:
     pressure_source : str
         Where the pressure came from, for logs.
     """
+
     mesh: vtkUnstructuredGrid
     U_inf: float
     p_inf: float
@@ -110,7 +134,9 @@ class PreparedMesh:
     pressure_source: str
 
 
-def _find_vector(ug: vtkUnstructuredGrid, specs: Iterable[VectorField], assoc: str) -> tuple[str | None, np.ndarray | None]:
+def _find_vector(
+    ug: vtkUnstructuredGrid, specs: Iterable[VectorField], assoc: str
+) -> tuple[str | None, np.ndarray | None]:
     """Find the first configured velocity field in the mesh.
 
     Parameters
@@ -118,7 +144,8 @@ def _find_vector(ug: vtkUnstructuredGrid, specs: Iterable[VectorField], assoc: s
     ug : vtkUnstructuredGrid
         The mesh.
     specs : iterable of VectorField
-        Candidate fields, in order of preference. A named field must have three components.
+        Candidate fields, in order of preference. A named field must have three
+        components.
     assoc : str
         ``"point"`` or ``"cell"``: which data to look in.
 
@@ -135,12 +162,18 @@ def _find_vector(ug: vtkUnstructuredGrid, specs: Iterable[VectorField], assoc: s
             a = vtk_to_numpy(data.GetArray(s.name))
             if a.ndim == 2 and a.shape[1] == 3:
                 return s.name, a
-        elif s.components is not None and all(data.HasArray(c) for c in s.components):
-            return "+".join(s.components), np.stack([vtk_to_numpy(data.GetArray(c)) for c in s.components], 1)
+        elif s.components is not None and all(
+            data.HasArray(c) for c in s.components
+        ):
+            return "+".join(s.components), np.stack(
+                [vtk_to_numpy(data.GetArray(c)) for c in s.components], 1
+            )
     return None, None
 
 
-def _find_scalar(ug: vtkUnstructuredGrid, names: Iterable[str], assoc: str) -> tuple[str | None, np.ndarray | None]:
+def _find_scalar(
+    ug: vtkUnstructuredGrid, names: Iterable[str], assoc: str
+) -> tuple[str | None, np.ndarray | None]:
     """Find the first configured scalar array in the mesh.
 
     Parameters
@@ -186,16 +219,20 @@ def _vtk(name: str, a: np.ndarray):
     return v
 
 
-def prepare_mesh(ug: vtkUnstructuredGrid, cfg: CaseConfig, keep_checks: tuple[str, ...] = ()) -> PreparedMesh:
-    """Select the velocity and pressure, non-dimensionalize them and find the ground.
+def prepare_mesh(
+    ug: vtkUnstructuredGrid, cfg: CaseConfig, keep_checks: tuple[str, ...] = ()
+) -> PreparedMesh:
+    """Select velocity and pressure, non-dimensionalize them, find the ground.
 
-    Velocity and pressure come from the data that ``cfg.field_source`` names, with no fallback to the
-    other kind. For ``"cell"``, they are averaged to the points with ``vtkCellDataToPointData``. Whatever
-    the source, the cell velocity is also kept as ``U_cell`` when the mesh has it, because the label
+    Velocity and pressure come from the data that ``cfg.field_source`` names,
+    with no fallback to the other kind. For ``"cell"``, they are averaged to the
+    points with ``vtkCellDataToPointData``. Whatever the source, the cell
+    velocity is also kept as ``U_cell`` when the mesh has it, because the label
     ingredients take their gradients of it. Nothing is rotated.
 
-    ``U_inf`` and ``p_inf`` come from the config, or from the mesh at ``flow.reference_probe``. The
-    velocity becomes ``U_nd = U / U_inf`` and the pressure ``Cp = 2 (p - p_inf) / (rho U_inf^2)``.
+    ``U_inf`` and ``p_inf`` come from the config, or from the mesh at
+    ``flow.reference_probe``. The velocity becomes ``U_nd = U / U_inf`` and the
+    pressure ``Cp = 2 (p - p_inf) / (rho U_inf^2)``.
 
     Parameters
     ----------
@@ -211,24 +248,31 @@ def prepare_mesh(ug: vtkUnstructuredGrid, cfg: CaseConfig, keep_checks: tuple[st
     PreparedMesh
         A new grid that shares ``ug``'s points and cells, with only:
 
-        - point data: ``U_nd`` (3), ``Cp``, and the arrays named in ``keep_checks``;
-        - cell data: ``U_cell`` (3) when the mesh has cell velocity, and the arrays named in
+        - point data: ``U_nd`` (3), ``Cp``, and the arrays named in
+        ``keep_checks``;
+        - cell data: ``U_cell`` (3) when the mesh has cell velocity, and the
+        arrays named in
           ``keep_checks``;
 
-        together with ``U_inf``, ``p_inf``, the ground coordinate and the field sources.
+        together with ``U_inf``, ``p_inf``, the ground coordinate and the field
+        sources.
 
     Raises
     ------
     KeyError
-        If the mesh's ``field_source`` data holds no configured velocity or no configured pressure.
+        If the mesh's ``field_source`` data holds no configured velocity or no
+        configured pressure.
     ValueError
-        If ``cfg.field_source`` is not ``"point"`` or ``"cell"``; if ``flow.rho`` or ``U_inf`` is not
-        positive; or if the reference probe lies outside the mesh.
+        If ``cfg.field_source`` is not ``"point"`` or ``"cell"``; if
+        ``flow.rho`` or ``U_inf`` is not positive; or if the reference probe
+        lies outside the mesh.
     """
     f = cfg.flow
     source = cfg.field_source
     if source not in FIELD_SOURCES:
-        raise ValueError(f"field_source must be one of {FIELD_SOURCES}, got {source!r}")
+        raise ValueError(
+            f"field_source must be one of {FIELD_SOURCES}, got {source!r}"
+        )
     if not f.rho > 0:
         raise ValueError(f"flow.rho must be > 0, got {f.rho}")
 
@@ -240,7 +284,10 @@ def prepare_mesh(ug: vtkUnstructuredGrid, cfg: CaseConfig, keep_checks: tuple[st
     if p is None:
         missing.append(f"pressure {list(cfg.pressure)}")
     if missing:
-        raise KeyError(f"field_source is '{source}', but the mesh's {source} data has no " + " and no ".join(missing))
+        raise KeyError(
+            f"field_source is '{source}', but the mesh's {source} data has no "
+            + " and no ".join(missing)
+        )
 
     if source == "cell":
         Uc = U
@@ -256,7 +303,9 @@ def prepare_mesh(ug: vtkUnstructuredGrid, cfg: CaseConfig, keep_checks: tuple[st
         p = vtk_to_numpy(c2p.GetOutput().GetPointData().GetArray("p"))
         u_name, p_name = f"cell:{u_name} -> points", f"cell:{p_name} -> points"
     else:
-        _, Uc = _find_vector(ug, cfg.velocity, "cell")    # None when the mesh has no cell velocity
+        _, Uc = _find_vector(
+            ug, cfg.velocity, "cell"
+        )  # None when the mesh has no cell velocity
 
     out = vtkUnstructuredGrid()
     out.ShallowCopy(ug)
@@ -277,8 +326,10 @@ def prepare_mesh(ug: vtkUnstructuredGrid, cfg: CaseConfig, keep_checks: tuple[st
         U_inf_origin = "flow.U_inf"
     if not U_inf > 0:
         raise ValueError(f"U_inf must be > 0, got {U_inf:g} ({U_inf_origin})")
-    U_nd = (U.astype(np.float32) / np.float32(U_inf))
-    Cp = (2.0 * (p.astype(np.float64) - p_inf) / (f.rho * U_inf**2)).astype(np.float32)
+    U_nd = U.astype(np.float32) / np.float32(U_inf)
+    Cp = (2.0 * (p.astype(np.float64) - p_inf) / (f.rho * U_inf**2)).astype(
+        np.float32
+    )
     pd.AddArray(_vtk(U_ND, U_nd))
     pd.AddArray(_vtk(CP, Cp))
     if Uc is not None:
@@ -294,7 +345,9 @@ def prepare_mesh(ug: vtkUnstructuredGrid, cfg: CaseConfig, keep_checks: tuple[st
     return PreparedMesh(out, U_inf, p_inf, ground, u_name, p_name)
 
 
-def probe_point(ug: vtkUnstructuredGrid, x: Sequence[float], U: np.ndarray, p: np.ndarray) -> tuple[np.ndarray, float]:
+def probe_point(
+    ug: vtkUnstructuredGrid, x: Sequence[float], U: np.ndarray, p: np.ndarray
+) -> tuple[np.ndarray, float]:
     """Interpolate the point velocity and pressure at one coordinate.
 
     Parameters
@@ -322,16 +375,24 @@ def probe_point(ug: vtkUnstructuredGrid, x: Sequence[float], U: np.ndarray, p: n
     """
     loc = vtkStaticCellLocator(data_set=ug)
     loc.BuildLocator()
-    cell, pcoords, weights = vtkGenericCell(), [0.0] * 3, [0.0] * MAX_CELL_POINTS
+    cell, pcoords, weights = (
+        vtkGenericCell(),
+        [0.0] * 3,
+        [0.0] * MAX_CELL_POINTS,
+    )
     cid = loc.FindCell(list(map(float, x)), 1e-12, cell, pcoords, weights)
     if cid < 0:
-        raise ValueError(f"flow.reference_probe {tuple(x)} is not inside any mesh cell")
+        raise ValueError(
+            f"flow.reference_probe {tuple(x)} is not inside any mesh cell"
+        )
     ids = [cell.GetPointId(i) for i in range(cell.GetNumberOfPoints())]
-    w = np.array(weights[:len(ids)])
+    w = np.array(weights[: len(ids)])
     return (w[:, None] * U[ids]).sum(0), float((w * p[ids]).sum())
 
 
-def resample(mesh: vtkUnstructuredGrid, spec: ImageSpec, names: list[str] | None = None) -> dict[str, np.ndarray]:
+def resample(
+    mesh: vtkUnstructuredGrid, spec: ImageSpec, names: list[str] | None = None
+) -> dict[str, np.ndarray]:
     """Probe the mesh's point arrays at the voxels of a grid.
 
     Parameters
@@ -346,23 +407,39 @@ def resample(mesh: vtkUnstructuredGrid, spec: ImageSpec, names: list[str] | None
     Returns
     -------
     dict[str, numpy.ndarray]
-        Each sampled array by name, shaped ``(nx, ny, nz)`` for a scalar or ``(C, nx, ny, nz)`` for
-        a vector, indexed ``[i, j, k] = (x, y, z)``. The extra entry ``"valid"`` is a boolean
-        ``(nx, ny, nz)`` array, true where a mesh cell holds the voxel.
+        Each sampled array by name, shaped ``(nx, ny, nz)`` for a scalar or
+        ``(C, nx, ny, nz)`` for a vector, indexed ``[i, j, k] = (x, y, z)``. The
+        extra entry ``"valid"`` is a boolean ``(nx, ny, nz)`` array, true where
+        a mesh cell holds the voxel.
     """
-    resampler = vtkResampleToImage(input_data_object=mesh, sampling_dimensions=spec.dims,
-                                   sampling_bounds=spec.bounds, use_input_bounds=False)
+    resampler = vtkResampleToImage(
+        input_data_object=mesh,
+        sampling_dimensions=spec.dims,
+        sampling_bounds=spec.bounds,
+        use_input_bounds=False,
+    )
     resampler.Update()
     pd = resampler.GetOutput().GetPointData()
     out: dict[str, np.ndarray] = {}
-    for name in names or [pd.GetArrayName(i) for i in range(pd.GetNumberOfArrays())]:
+    for name in names or [
+        pd.GetArrayName(i) for i in range(pd.GetNumberOfArrays())
+    ]:
         a = vtk_to_numpy(pd.GetArray(name))
         if name == "vtkValidPointMask":
             continue
-        out[name] = (a.reshape(spec.dims, order="F") if a.ndim == 1
-                     else np.stack([a[:, c].reshape(spec.dims, order="F") for c in range(a.shape[1])]))
+        out[name] = (
+            a.reshape(spec.dims, order="F")
+            if a.ndim == 1
+            else np.stack(
+                [
+                    a[:, c].reshape(spec.dims, order="F")
+                    for c in range(a.shape[1])
+                ]
+            )
+        )
     valid = vtk_to_numpy(pd.GetArray("vtkValidPointMask"))
-    # the mask is a char array, which NumPy can return as bytes ('S1'): read the same bytes as integers
+    # the mask is a char array, which NumPy can return as bytes ('S1'): read the
+    # same bytes as integers
     if valid.dtype.kind == "S":
         valid = valid.view(np.uint8)
     out["valid"] = valid.reshape(spec.dims, order="F") > 0
@@ -371,21 +448,25 @@ def resample(mesh: vtkUnstructuredGrid, spec: ImageSpec, names: list[str] | None
 
 @dataclass
 class GridFields:
-    """The velocity, the geometry arrays, the fluid mask and the sanity checks of one case.
+    """The velocity, geometry arrays, fluid mask and sanity checks of one case.
 
     Attributes
     ----------
     u : numpy.ndarray
-        Float32, shape ``(3, nx, ny, nz)``: velocity / U_inf, 0 outside the fluid.
+        Float32, shape ``(3, nx, ny, nz)``: velocity / U_inf, 0 outside the
+        fluid.
     body_sdf : numpy.ndarray
-        Float32 ``(nx, ny, nz)``: signed distance to the body in units of H, negative inside the body.
+        Float32 ``(nx, ny, nz)``: signed distance to the body in units of H,
+        negative inside the body.
     height : numpy.ndarray
         Float32 ``(nx, ny, nz)``: height above the ground in units of H.
     fluid : numpy.ndarray
-        Boolean ``(nx, ny, nz)``: inside the mesh and outside the body. Used for labels only; not stored.
+        Boolean ``(nx, ny, nz)``: inside the mesh and outside the body. Used for
+        labels only; not stored.
     checks : dict
         Voxel counts and other diagnostics, for the case metadata.
     """
+
     u: np.ndarray
     body_sdf: np.ndarray
     height: np.ndarray
@@ -393,17 +474,24 @@ class GridFields:
     checks: dict
 
 
-def assemble_grid(image: dict[str, np.ndarray], body: vtkPolyData, geo: CaseGeometry, spec: ImageSpec,
-                  contract: Contract) -> GridFields:
+def assemble_grid(
+    image: dict[str, np.ndarray],
+    body: vtkPolyData,
+    geo: CaseGeometry,
+    spec: ImageSpec,
+    contract: Contract,
+) -> GridFields:
     """Build the velocity and the geometry arrays on the voxel grid.
 
-    Computes the signed distance to the body, marks the fluid voxels (inside the mesh, outside the body),
-    zeroes the velocity elsewhere, and computes the height above the ground.
+    Computes the signed distance to the body, marks the fluid voxels (inside the
+    mesh, outside the body), zeroes the velocity elsewhere, and computes the
+    height above the ground.
 
     Parameters
     ----------
     image : dict[str, numpy.ndarray]
-        The resampled prepared mesh from ``resample``: needs ``U_nd`` and ``valid``.
+        The resampled prepared mesh from ``resample``: needs ``U_nd`` and
+        ``valid``.
     body : vtkPolyData
         The closed body surface.
     geo : CaseGeometry
@@ -416,30 +504,44 @@ def assemble_grid(image: dict[str, np.ndarray], body: vtkPolyData, geo: CaseGeom
     Returns
     -------
     GridFields
-        The velocity, the signed distance, the height, the fluid mask and the checks.
+        The velocity, the signed distance, the height, the fluid mask and the
+        checks.
     """
     sdf_info: dict = {}
-    sdf, inside = signed_distance(body, spec, band=contract.sdf_exact_band_H * geo.H, info=sdf_info)
+    sdf, inside = signed_distance(
+        body, spec, band=contract.sdf_exact_band_H * geo.H, info=sdf_info
+    )
     valid = image["valid"]
     fluid = valid & ~inside
     U = image[U_ND].astype(np.float32)
     U[:, ~fluid] = 0.0
-    # voxels that are neither in the mesh nor in the body: the box leaves the CFD domain, or the
-    # mesh has holes. Either way the velocity there is unreliable, so count them.
+    # voxels that are neither in the mesh nor in the body: the box leaves the
+    # CFD domain, or the mesh has holes. Either way the velocity there is
+    # unreliable, so count them.
     outside_both = ~valid & ~inside
-    checks = dict(
-        n_voxels=int(valid.size),
-        n_fluid=int(fluid.sum()),
-        n_body=int(inside.sum()),
-        n_not_in_mesh_nor_body=int(outside_both.sum()),
-        n_in_mesh_and_body=int((valid & inside).sum()),  # > 0 for immersed-boundary meshes
-        sdf=sdf_info,
-    )
+    checks = {
+        "n_voxels": int(valid.size),
+        "n_fluid": int(fluid.sum()),
+        "n_body": int(inside.sum()),
+        "n_not_in_mesh_nor_body": int(outside_both.sum()),
+        "n_in_mesh_and_body": int(
+            (valid & inside).sum()
+        ),  # > 0 for immersed-boundary meshes
+        "sdf": sdf_info,
+    }
     sdf_H = (sdf / geo.H).astype(np.float32)
-    h_H = np.broadcast_to(geo.height_above_ground(spec) / geo.H, spec.dims).astype(np.float32)
-    checks["geometry"] = dict(
-        body_depth_max_H=float(-sdf_H.min()),                 # the deepest voxel inside the body
-        n_sdf_neg_not_body=int(((sdf_H < 0) & ~inside).sum()),  # 0: sdf < 0 exactly on the body voxels
-        height_first_layer_H=float(h_H.min()),                # floor_offset_H, when the grid starts at the floor
-    )
+    h_H = np.broadcast_to(
+        geo.height_above_ground(spec) / geo.H, spec.dims
+    ).astype(np.float32)
+    checks["geometry"] = {
+        "body_depth_max_H": float(
+            -sdf_H.min()
+        ),  # the deepest voxel inside the body
+        "n_sdf_neg_not_body": int(
+            ((sdf_H < 0) & ~inside).sum()
+        ),  # 0: sdf < 0 exactly on the body voxels
+        "height_first_layer_H": float(
+            h_H.min()
+        ),  # floor_offset_H, when the grid starts at the floor
+    }
     return GridFields(U, sdf_H, h_H, fluid, checks)

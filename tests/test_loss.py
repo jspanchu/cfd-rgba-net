@@ -1,4 +1,5 @@
-"""Verification: the loss ignores voxels outside the core and stays finite when a batch has no labelled voxel."""
+"""Verification: the loss ignores voxels outside the core and stays finite when
+a batch has no labelled voxel."""
 
 import pytest
 import torch
@@ -21,8 +22,12 @@ def loss_fn():
 
 
 def test_class_weights_are_capped_inverse_frequencies():
-    assert class_weights((0.017, 0.029)) == pytest.approx(torch.tensor([1.0, 57.8, 33.5]), abs=0.1)
-    assert class_weights((0.001, 0.5)) == pytest.approx(torch.tensor([1.0, 100.0, 1.0]))
+    assert class_weights((0.017, 0.029)) == pytest.approx(
+        torch.tensor([1.0, 57.8, 33.5]), abs=0.1
+    )
+    assert class_weights((0.001, 0.5)) == pytest.approx(
+        torch.tensor([1.0, 100.0, 1.0])
+    )
 
 
 def test_values_outside_the_core_do_not_change_the_loss(loss_fn):
@@ -30,9 +35,13 @@ def test_values_outside_the_core_do_not_change_the_loss(loss_fn):
     logits = torch.randn(2, 3, 8, 8, 8)
     before = loss_fn(logits, labels, core)[0]
     logits.permute(0, 2, 3, 4, 1)[~core] = 100.0
-    labels[:, 0][~core] = 1  # so are the labels (vortex here, never both classes at once)
+    labels[:, 0][~core] = (
+        1  # so are the labels (vortex here, never both classes at once)
+    )
     labels[:, 1][~core] = 0
-    assert loss_fn(logits, labels, core)[0].item() == pytest.approx(before.item())
+    assert loss_fn(logits, labels, core)[0].item() == pytest.approx(
+        before.item()
+    )
 
 
 def test_gradients_are_finite_without_labelled_voxels(loss_fn):

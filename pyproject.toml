@@ -24,7 +24,11 @@ cfd-rgba-net-infer = "cfd_rgba_net.infer:main"
 cfd-rgba-net-render = "cfd_rgba_net.render:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+    "ruff>=0.17.5",
+    "ty>=0.0.106",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -47,10 +51,12 @@ explicit = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
-typeCheckingMode = "standard"
+[tool.ruff]
+line-length = 80
+
+[tool.ruff.lint]
+# E501 is off in ruff's defaults; enable it so the limit is enforced.
+extend-select = ["E501"]
 
 [tool.ty.environment]
 python = ".venv"
