@@ -1,27 +1,9 @@
 """Render the net's vortex and shear-layer probabilities as a volume, optionally
 with the body surface.
-
-    cfd-rgba-net-render pred.vti --config configs/render_default.yaml \
-        --body ahmed.stl --out img/run280 --views side top rear \
-        [--compare reference.vti]
-
-The input is a .vti with point arrays ``vortex`` and ``shear_layer``
-(probabilities in [0, 1]; the reference labels, uint8 0/1, have the same names).
-Probability drives opacity through a per-feature curve and each feature has its
-own colour, set in the config (see configs/render_default.yaml). The two
-features are two volumes in one ``vtkMultiVolume``, so each has its own colour
-and opacity map, the rays composite both, and the body, an opaque surface, hides
-the volume behind it. Rendering is offscreen and runs on the GPU (EGL when there
-is no X display). The frame is up = +z, flow = +x, as in the AhmedML grid.
-
-Writes <out>_<view>.png per view and, with --compare, <out>_<view>_compare.png
-(input | reference).
 """
 
 from __future__ import annotations
 
-import argparse
-import time
 from pathlib import Path
 
 import numpy as np
@@ -32,7 +14,6 @@ from vtkmodules.vtkCommonCore import VTK_FLOAT
 from vtkmodules.vtkCommonDataModel import vtkImageData, vtkPiecewiseFunction
 from vtkmodules.vtkFiltersCore import vtkPolyDataNormals
 from vtkmodules.vtkIOImage import vtkPNGWriter
-from vtkmodules.vtkIOXML import vtkXMLImageDataReader
 from vtkmodules.vtkRenderingCore import (
     vtkActor,
     vtkColorTransferFunction,
@@ -47,7 +28,7 @@ from vtkmodules.vtkRenderingVolume import vtkMultiVolume
 from vtkmodules.vtkRenderingVolumeOpenGL2 import vtkOpenGLGPUVolumeRayCastMapper
 
 from .config import configs_dir
-from .geometry import ImageSpec, read_body
+from .geometry import ImageSpec
 
 CLASSES = ("none", "vortex", "shear_layer")  # channel order of the net's output
 
@@ -75,37 +56,6 @@ def load_config(path: str | Path | None = None) -> dict:
     """
     with open(path or configs_dir() / "render_default.yaml") as fh:
         return yaml.safe_load(fh)
-
-
-def read_vti(path: str | Path) -> tuple[np.ndarray, ImageSpec]:
-    """Read vortex and shear-layer probabilities from a .vti file.
-
-    Parameters
-    ----------
-    path : str or pathlib.Path
-        A file written by ``io.save_vti`` with point arrays ``vortex`` and
-        ``shear_layer`` (float probabilities or uint8 labels).
-
-    Returns
-    -------
-    probs : numpy.ndarray
-        Float32 array of shape ``(3, nx, ny, nz)`` in the order of ``CLASSES``.
-        ``none`` is ``1 - vortex - shear_layer``, floored at 0.
-    spec : ImageSpec
-        The voxel grid.
-    """
-    reader = vtkXMLImageDataReader(file_name=str(path))
-    reader.Update()
-    image = reader.GetOutput()
-    dims = image.GetDimensions()
-    f = [
-        vtk_to_numpy(image.GetPointData().GetArray(n))
-        .astype(np.float32)
-        .reshape(dims, order="F")
-        for n in CLASSES[1:]
-    ]
-    spec = ImageSpec(image.GetOrigin(), image.GetSpacing()[0], dims)
-    return np.stack([np.clip(1 - f[0] - f[1], 0, None), *f]), spec
 
 
 def _volume(
@@ -201,6 +151,12 @@ def render_probabilities(
 ) -> dict[str, np.ndarray]:
     """Render vortex and shear-layer probabilities from a volume ray caster.
 
+    Probability fields drive that feature's opacity through an individual
+    transfer function, and each feature has its own colour, both set in
+    the config (see ``configs/render_default.yaml``). The reference labels
+    (uint8 0/1) work too. The frame is up = +z, flow = +x, as in the AhmedML
+    grid.
+
     Parameters
     ----------
     probs : torch.Tensor or numpy.ndarray
@@ -241,6 +197,11 @@ def render_volumes(
 ) -> dict[str, np.ndarray]:
     """Render scalar volumes in [0, 1], each with its own colour and opacity
     curve, from a volume ray caster.
+
+    The volumes are in one ``vtkMultiVolume``, so each has its own colour and
+    opacity map, the rays composite all of them, and the body, an opaque
+    surface, hides the volume behind it. Rendering is offscreen and runs on the
+    GPU (EGL when there is no X display).
 
     Parameters
     ----------
@@ -326,76 +287,3 @@ def write_png(path: str | Path, image: np.ndarray):
         )
     )
     vtkPNGWriter(file_name=str(path), input_data=vtk_image).Write()
-
-
-def main(argv: list[str] | None = None):
-    """Run the ``cfd-rgba-net-render`` command line.
-
-    Parameters
-    ----------
-    argv : list[str] or None, optional
-        The arguments. ``None`` means ``sys.argv[1:]``.
-    """
-    ap = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    ap.add_argument(
-        "vti", type=Path, help=".vti with point arrays vortex and shear_layer"
-    )
-    ap.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help="render config YAML (default: configs/render_default.yaml)",
-    )
-    ap.add_argument(
-        "--body",
-        type=Path,
-        default=None,
-        help="body STL, drawn as an opaque surface",
-    )
-    ap.add_argument(
-        "--out",
-        type=Path,
-        required=True,
-        help="PNG prefix; <out>_<view>.png is written per view",
-    )
-    ap.add_argument(
-        "--views", nargs="+", default=["side"], choices=sorted(VIEWS)
-    )
-    ap.add_argument(
-        "--compare",
-        type=Path,
-        default=None,
-        help="second .vti (for example the reference labels), rendered the "
-        "same way and written beside the first as <out>_<view>_compare.png",
-    )
-    args = ap.parse_args(argv)
-    config = load_config(args.config)
-    body = read_body(args.body) if args.body else None
-    renders = []
-    for path in (args.vti, args.compare):
-        if path is None:
-            continue
-        probs, spec = read_vti(path)
-        t = time.perf_counter()
-        renders.append(
-            render_probabilities(probs, spec, config, tuple(args.views), body)
-        )
-        print(
-            f"{path.name}: {len(args.views)} views in "
-            f"{time.perf_counter() - t:.2f} s",
-            flush=True,
-        )
-    for view in args.views:
-        write_png(f"{args.out}_{view}.png", renders[0][view])
-        if args.compare:
-            write_png(
-                f"{args.out}_{view}_compare.png",
-                np.concatenate([r[view] for r in renders], axis=1),
-            )
-
-
-if __name__ == "__main__":
-    main()
