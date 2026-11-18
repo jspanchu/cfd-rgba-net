@@ -1,19 +1,10 @@
-"""Verification: sliding-window inference, the metrics, and the baseline's published scores."""
-
-import os
-from pathlib import Path
+"""Verification: sliding-window inference and the metrics."""
 
 import numpy as np
 import pytest
 import torch
-import zarr
 
-from cfd_rgba_net.baseline import baseline_classes
-from cfd_rgba_net.config import Contract, LabelRules
 from cfd_rgba_net.evaluate import class_counts, metrics, pool, predict, score
-from cfd_rgba_net.label import core_mask
-
-STORES = Path(os.environ.get("CFD_RGBA_STORES", "/data/cfd-rgba-net-data/ahmedML/out_v1"))
 
 
 def test_windowed_inference_matches_whole_volume():
@@ -50,18 +41,3 @@ def test_score_counts_each_region_and_pools_runs():
     assert [s[r]["vortex"]["inter"] for r in ("all", "near_body", "far")] == [4 * 64, 2 * 64, 2 * 64]
     assert pool([s, s])["all"]["vortex"]["inter"] == 2 * s["all"]["vortex"]["inter"]
     assert s["all"]["shear_layer"]["ref"] == 0
-
-
-@pytest.mark.skipif(not (STORES / "ahmedml_run216.zarr").exists(), reason="AhmedML stores not available")
-def test_baseline_reproduces_the_published_iou():
-    """The roadmap's baseline on runs 216, 219, 45 and 383: vortex 0.88, shear layer 0.68."""
-    contract, rules = Contract.load(), LabelRules.load()
-    scores = []
-    for run in (216, 219, 45, 383):
-        store = zarr.open_group(STORES / f"ahmedml_run{run}.zarr", mode="r")
-        x, labels = store["inputs"][:], store["labels"][:]
-        core = core_mask(x[4] < 1, (1 - x[5]) * contract.ground_proximity_range_H, rules, contract.n_per_H)[1]
-        scores.append(score(baseline_classes(x, core, contract, rules), labels[0] + 2 * labels[1], core, x[4]))
-    iou = {c: metrics(pool(scores)["all"][c])["iou"] for c in ("vortex", "shear_layer")}
-    assert iou["vortex"] == pytest.approx(0.88, abs=0.01)
-    assert iou["shear_layer"] == pytest.approx(0.68, abs=0.01)

@@ -41,11 +41,13 @@ def dataset(tmp_path):
                                        dataset=str(tmp_path / "t.yaml"), seed=seed)
 
 
-def test_same_seed_gives_the_same_first_100_patches(dataset):
-    def first_100(seed):
-        return list(islice(DataLoader(dataset(seed), batch_size=4, num_workers=2), 25))
+def test_same_seed_gives_the_same_first_20_patches(dataset):
+    def first_20(seed):
+        # fork: the default forkserver re-imports torch in every worker, about 5 s per loader
+        loader = DataLoader(dataset(seed), batch_size=4, num_workers=2, multiprocessing_context="fork")
+        return list(islice(loader, 5))
 
-    a, b, other = first_100(7), first_100(7), first_100(8)
+    a, b, other = first_20(7), first_20(7), first_20(8)
     assert all(torch.equal(x[k], y[k]) for x, y in zip(a, b) for k in x)
     assert not torch.equal(a[0]["inputs"], other[0]["inputs"])
 

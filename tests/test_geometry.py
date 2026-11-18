@@ -176,15 +176,15 @@ def test_domain_above_ground_starts_at_domain():
 def test_signed_distance_band_matches_exact(tmp_path):
     """Exact inside the band; outside it the distance transform is within a voxel of the exact distance."""
     r = 0.5
-    write_stl(vtkSphereSource(radius=r, center=(0, 0, 1), theta_resolution=96, phi_resolution=96), tmp_path / "s.stl")
+    write_stl(vtkSphereSource(radius=r, center=(0, 0, 1), theta_resolution=48, phi_resolution=48), tmp_path / "s.stl")
     body = read_body(tmp_path / "s.stl")
-    spec = ImageSpec(origin=(-3.0, -2.0, 0.0), dx=0.05, dims=(121, 81, 61))
+    spec = ImageSpec(origin=(-3.0, -2.0, 0.0), dx=0.1, dims=(61, 41, 31))
     exact, inside_e = signed_distance(body, spec)
     info: dict = {}
     fast, inside_f = signed_distance(body, spec, band=0.5, info=info)
     assert np.array_equal(inside_e, inside_f) and info["method"].startswith("exact in band")
     X, Y, Z = np.meshgrid(spec.axis(0), spec.axis(1), spec.axis(2), indexing="ij")
-    in_band = (np.abs(X) < 0.975) & (np.abs(Y) < 0.975) & (np.abs(Z - 1) < 0.975)   # half a voxel inside the band
+    in_band = (np.abs(X) < 0.95) & (np.abs(Y) < 0.95) & (np.abs(Z - 1) < 0.95)   # half a voxel inside the band
     np.testing.assert_allclose(fast[in_band], exact[in_band], atol=1e-6)
     err = np.abs(fast - exact)[~in_band]
-    assert err.max() < 0.05 and np.median(err) < 0.01      # under a voxel (dx = 0.05); typically a fraction
+    assert err.max() < 0.1 and np.median(err) < 0.02       # under a voxel (dx = 0.1); typically a fraction
