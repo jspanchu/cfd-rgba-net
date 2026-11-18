@@ -1,0 +1,21 @@
+# Local hooks run the ruff and ty pinned in uv.lock, so the hook and
+# `uv run` agree on versions.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --frozen ruff check
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --frozen ruff format
+        language: system
+        types: [python]
+      - id: ty-check
+        name: ty check
+        entry: uv run --frozen ty check
+        language: system
+        types: [python]
+        pass_filenames: false

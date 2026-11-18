@@ -25,6 +25,7 @@ cfd-rgba-net-render = "cfd_rgba_net.render:main"
 
 [dependency-groups]
 dev = [
+    "pre-commit>=4.7.0",
     "pytest>=8",
     "ruff>=0.17.5",
     "ty>=0.0.106",
