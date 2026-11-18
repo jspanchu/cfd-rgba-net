@@ -186,6 +186,34 @@ def render_probabilities(probs, spec: ImageSpec, config: dict | None = None, vie
     config = config or load_config()
     if hasattr(probs, "detach"):
         probs = probs.detach().cpu().numpy()
+    volumes = [(probs[CLASSES.index(name)], feature) for name, feature in config["features"].items()]
+    return render_volumes(volumes, spec, config, views, body)
+
+
+def render_volumes(volumes: list[tuple[np.ndarray, dict]], spec: ImageSpec, config: dict | None = None,
+                   views: tuple[str, ...] = ("side",), body=None) -> dict[str, np.ndarray]:
+    """Render scalar volumes in [0, 1], each with its own colour and opacity curve, from a volume ray caster.
+
+    Parameters
+    ----------
+    volumes : list[tuple[numpy.ndarray, dict]]
+        Per volume, its values of shape ``spec.dims`` and a config entry with ``color`` (RGB) and ``opacity``
+        (list of (value, opacity) points), like the entries of the config's ``features``.
+    spec : ImageSpec
+        The voxel grid.
+    config : dict or None, optional
+        Render config, see ``load_config``; its ``features`` are not read here. ``None`` uses the default.
+    views : tuple[str, ...], optional
+        Names from ``VIEWS``.
+    body : vtkPolyData or None, optional
+        The body surface, drawn opaque and framed as in ``render_probabilities``.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Per view, a uint8 array of shape ``(height, width, 3)``.
+    """
+    config = config or load_config()
     width, height = config["size"]
     ren = vtkRenderer(background=config["background"])
     win = vtkRenderWindow(off_screen_rendering=True, size=(width, height))
@@ -194,9 +222,8 @@ def render_probabilities(probs, spec: ImageSpec, config: dict | None = None, vie
     multi = vtkMultiVolume()
     mapper = vtkOpenGLGPUVolumeRayCastMapper()
     multi.SetMapper(mapper)
-    for port, name in enumerate(config["features"]):
-        vol, image = _volume(probs[CLASSES.index(name)], spec, config["features"][name],
-                             config["opacity_unit_voxels"] * spec.dx)
+    for port, (values, feature) in enumerate(volumes):
+        vol, image = _volume(values, spec, feature, config["opacity_unit_voxels"] * spec.dx)
         mapper.SetInputDataObject(port, image)
         multi.SetVolume(vol, port)
     ren.AddVolume(multi)

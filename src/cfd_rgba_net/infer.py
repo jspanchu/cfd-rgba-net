@@ -9,7 +9,8 @@
     baseline   the label rules on the same grid features
     labels     the label rules on the ingredients of the native mesh (vtkGradientFilter), then resampled
 
-Writes <out>_<view>.png per view and nothing else. The classes are 0 outside the core (walls and the floor),
+Writes <out>_<view>.png per view and, for net, <out>_<view>_uncertainty.png: the entropy of the net's
+three class probabilities over ln 3, drawn alone. The classes are 0 outside the core (walls and the floor),
 as in cfd-rgba-net-evaluate. Without --body, pass --H, the reference length in mesh units; the body is then
 the hole in the mesh.
 """
@@ -17,6 +18,7 @@ the hole in the mesh.
 from __future__ import annotations
 
 import argparse
+import math
 import resource
 import time
 from pathlib import Path
@@ -222,6 +224,26 @@ def rule_classes(q: torch.Tensor, core: torch.Tensor, rules: LabelRules) -> torc
     return torch.stack([~(vortex | shear), vortex, shear]).float()
 
 
+def normalized_entropy(p: torch.Tensor) -> torch.Tensor:
+    """Measure how uncertain the net is per voxel: the entropy of its class probabilities over its maximum.
+
+    Parameters
+    ----------
+    p : torch.Tensor
+        Float ``(K, nx, ny, nz)``: probabilities over K classes, summing to 1 per voxel, or all 0 where the
+        voxel is not scored (outside the core).
+
+    Returns
+    -------
+    torch.Tensor
+        Float32 ``(nx, ny, nz)`` in [0, 1]: 0 where one class is certain or the probabilities are all 0, 1
+        where all K classes are equally likely.
+    """
+    p = p.float()
+    # 0 log 0 = 0: the clamp only keeps log finite, and the product is still 0
+    return -(p * p.clamp_min(1e-12).log()).sum(0) / math.log(p.shape[0])
+
+
 def main(argv: list[str] | None = None):
     """Run the ``cfd-rgba-net-infer`` command line.
 
@@ -235,7 +257,7 @@ def main(argv: list[str] | None = None):
     from .geometry import read_body
     from .model import UNet3D
     from .preprocess import read_volume
-    from .render import VIEWS, load_config, render_probabilities, write_png
+    from .render import VIEWS, load_config, render_probabilities, render_volumes, write_png
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("volume", type=Path, help="the case's volume mesh (.vtu)")
@@ -287,10 +309,21 @@ def main(argv: list[str] | None = None):
         step("rules applied")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    images = render_probabilities(p, spec, load_config(args.render_config), tuple(args.views), body)
+    config = load_config(args.render_config)
+    images = render_probabilities(p, spec, config, tuple(args.views), body)
     for view, image in images.items():
         write_png(f"{args.out}_{view}.png", image)
     step(f"rendered {', '.join(args.views)}")
+
+    if args.method == "net":
+        u = normalized_entropy(p)
+        n_core = int(core.sum())
+        frac = {t: float((u > t).sum()) / max(n_core, 1) for t in (0.05, 0.3, 0.63)}
+        images = render_volumes([(u.numpy(), config["uncertainty"])], spec, config, tuple(args.views), body)
+        for view, image in images.items():
+            write_png(f"{args.out}_{view}_uncertainty.png", image)
+        step(f"rendered uncertainty; of the core voxels, {frac[0.05]:.3%} above 0.05, {frac[0.3]:.3%} above 0.3 "
+             f"and {frac[0.63]:.3%} above 0.63 (an even split between two classes)")
 
 if __name__ == "__main__":
     main()

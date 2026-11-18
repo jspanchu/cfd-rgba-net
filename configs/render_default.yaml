@@ -16,3 +16,10 @@ features:
   shear_layer:
     color: [0.10, 0.50, 1.00]
     opacity: [[0.3, 0.0], [1.0, 0.8]]
+# The net's uncertainty, drawn alone in <out>_<view>_uncertainty.png by cfd-rgba-net-infer --method net: the
+# entropy of its three class probabilities over ln 3, from 0 (certain) to 1 (all three equally likely). The
+# curve starts at 0.05, about 1 % on a second class: the net is confident almost everywhere, and a curve
+# starting at 0.3 left the few uncertain voxels nearly invisible. An even split between two classes is 0.63.
+uncertainty:
+  color: [0.85, 0.45, 0.00]
+  opacity: [[0.05, 0.0], [0.63, 0.9]]

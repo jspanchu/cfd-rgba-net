@@ -68,7 +68,9 @@ parts, rewritten in appended binary, wedges fixed with `fix_wedges.convert`).
 ## Inference on an unseen case
 
 From a raw AhmedML-family volume to volume renderings of the vortex and shear-layer classes, one command per
-method; each reads the .vtu and writes `<out>_<view>.png` only:
+method; each reads the .vtu and writes `<out>_<view>.png`, and `net` also writes `<out>_<view>_uncertainty.png`,
+the entropy of its three class probabilities over ln 3 (0 certain, 0.63 an even split between two classes, 1
+all three equally likely):
 
 ```sh
 # get a case (here test_interp run 280)
