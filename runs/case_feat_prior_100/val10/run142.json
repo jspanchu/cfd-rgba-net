@@ -1,0 +1,149 @@
+{
+ "run": 142,
+ "commit": "b94e24d1e9867056a63a564a36f1a37d6a1157c8",
+ "dirty": false,
+ "split": "val",
+ "csv_sha256": "db00fb73b67eaaee1f8373f4c022773cc221e93cf8a5fdd76341e181de3b89bd",
+ "checkpoint": "runs/case_feat_prior_100/best.pt",
+ "checkpoint_sha256": "6d0317a8f0f95a1bc4204d020caeb7c2edf92f0d780d8933506cc97b96c6d785",
+ "model": {
+  "levels": 5,
+  "prior": true
+ },
+ "net": {
+  "all": {
+   "vortex": {
+    "inter": 15330,
+    "pred": 17234,
+    "ref": 16551,
+    "surf_match": 21831,
+    "surf": 22249,
+    "iou": 0.8306691953400163,
+    "dice": 0.9075033298801243,
+    "surface_dice": 0.9812126387702819
+   },
+   "shear_layer": {
+    "inter": 34716,
+    "pred": 38425,
+    "ref": 36631,
+    "surf_match": 54254,
+    "surf": 55596,
+    "iou": 0.8605850272682202,
+    "dice": 0.9250692816030697,
+    "surface_dice": 0.9758615727750198
+   }
+  },
+  "near_body": {
+   "vortex": {
+    "inter": 2688,
+    "pred": 3375,
+    "ref": 3196,
+    "surf_match": 5844,
+    "surf": 6027,
+    "iou": 0.6922482616533608,
+    "dice": 0.8181403134987064,
+    "surface_dice": 0.9696366351418616
+   },
+   "shear_layer": {
+    "inter": 7794,
+    "pred": 9251,
+    "ref": 8557,
+    "surf_match": 16628,
+    "surf": 17308,
+    "iou": 0.7783103654883163,
+    "dice": 0.8753369272237197,
+    "surface_dice": 0.9607118095678299
+   }
+  },
+  "far": {
+   "vortex": {
+    "inter": 0,
+    "pred": 0,
+    "ref": 0,
+    "surf_match": 0,
+    "surf": 0,
+    "iou": null,
+    "dice": null,
+    "surface_dice": null
+   },
+   "shear_layer": {
+    "inter": 423,
+    "pred": 434,
+    "ref": 451,
+    "surf_match": 884,
+    "surf": 885,
+    "iou": 0.9155844155844156,
+    "dice": 0.9559322033898305,
+    "surface_dice": 0.9988700564971752
+   }
+  }
+ },
+ "baseline": {
+  "all": {
+   "vortex": {
+    "inter": 15308,
+    "pred": 18343,
+    "ref": 16551,
+    "surf_match": 22644,
+    "surf": 23409,
+    "iou": 0.7815786786480139,
+    "dice": 0.877400126096177,
+    "surface_dice": 0.9673202614379085
+   },
+   "shear_layer": {
+    "inter": 32502,
+    "pred": 41954,
+    "ref": 36631,
+    "surf_match": 51584,
+    "surf": 59940,
+    "iou": 0.7052926241781134,
+    "dice": 0.8271807596869631,
+    "surface_dice": 0.8605939272605939
+   }
+  },
+  "near_body": {
+   "vortex": {
+    "inter": 2691,
+    "pred": 4204,
+    "ref": 3196,
+    "surf_match": 6292,
+    "surf": 6808,
+    "iou": 0.5714589084731365,
+    "dice": 0.7272972972972973,
+    "surface_dice": 0.9242068155111633
+   },
+   "shear_layer": {
+    "inter": 7397,
+    "pred": 14909,
+    "ref": 8557,
+    "surf_match": 16697,
+    "surf": 23075,
+    "iou": 0.46032733835335116,
+    "dice": 0.6304440467058723,
+    "surface_dice": 0.7235969664138678
+   }
+  },
+  "far": {
+   "vortex": {
+    "inter": 0,
+    "pred": 0,
+    "ref": 0,
+    "surf_match": 0,
+    "surf": 0,
+    "iou": null,
+    "dice": null,
+    "surface_dice": null
+   },
+   "shear_layer": {
+    "inter": 451,
+    "pred": 517,
+    "ref": 451,
+    "surf_match": 967,
+    "surf": 968,
+    "iou": 0.8723404255319149,
+    "dice": 0.9318181818181818,
+    "surface_dice": 0.9989669421487604
+   }
+  }
+ }
+}
