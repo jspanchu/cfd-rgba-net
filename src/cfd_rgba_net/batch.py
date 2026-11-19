@@ -16,7 +16,9 @@ so only the training data stays. After a failed build they are kept for
 diagnosis; --keep keeps every download.
 
 Up to --workers builds run at the same time, each with --threads threads
-(default: all cores / workers). Runs whose <out>/<dataset>_run<N>.zarr exists
+(default: all cores / workers). A separate download queue fetches the next runs
+while the builds run, up to --prefetch runs ahead of the builders, so the GPU
+does not wait for the network. Runs whose <out>/<dataset>_run<N>.zarr exists
 are skipped: a store is renamed into place only when complete. A store built
 with an older config or contract is skipped too.
 """
@@ -25,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -225,6 +228,19 @@ def main(argv: list[str] | None = None) -> int:
         "--workers", type=int, default=1, help="builds at the same time"
     )
     ap.add_argument(
+        "--prefetch",
+        type=int,
+        default=2,
+        help="runs downloaded ahead of the builders; at most workers + "
+        "prefetch runs are on disk at once",
+    )
+    ap.add_argument(
+        "--downloads",
+        type=int,
+        default=1,
+        help="downloads at the same time",
+    )
+    ap.add_argument(
         "--threads",
         type=int,
         default=None,
@@ -258,26 +274,53 @@ def main(argv: list[str] | None = None) -> int:
     results: dict[int, bool] = {}
     lock = threading.Lock()
 
-    def worker(r: int):
+    # runs on disk (downloading, downloaded or building): bounds the disk use
+    on_disk = threading.Semaphore(args.workers + args.prefetch)
+    ready: queue.Queue = queue.Queue()
+
+    def fetch(r: int):
         try:
             download(cfg, r, args.work)
-            ok = build(cfg, r, args)
-        except Exception as e:  # noqa: BLE001  (report and go on with the next run)
-            print(f"[run] run_{r}: {e}", flush=True)
-            ok = False
-        if ok and not args.keep:
-            shutil.rmtree(args.work / f"run_{r}", ignore_errors=True)
-        with lock:
-            results[r] = ok
-            bad = sorted(k for k, v in results.items() if not v)
-            print(
-                f"done: {sum(results.values())}/{len(results)} ok; "
-                f"failed: {bad}",
-                flush=True,
-            )
+            ready.put((r, None))
+        except Exception as e:  # noqa: BLE001  (reported by the builder)
+            ready.put((r, e))
 
+    def feed():
+        with ThreadPoolExecutor(max_workers=args.downloads) as dl_pool:
+            for r in todo:
+                on_disk.acquire()
+                dl_pool.submit(fetch, r)
+        for _ in range(args.workers):
+            ready.put(None)
+
+    def builder():
+        while (item := ready.get()) is not None:
+            r, err = item
+            try:
+                if err is not None:
+                    raise err
+                ok = build(cfg, r, args)
+            except Exception as e:  # noqa: BLE001  (report and go on with the next run)
+                print(f"[run] run_{r}: {e}", flush=True)
+                ok = False
+            if ok and not args.keep:
+                shutil.rmtree(args.work / f"run_{r}", ignore_errors=True)
+            on_disk.release()
+            with lock:
+                results[r] = ok
+                bad = sorted(k for k, v in results.items() if not v)
+                print(
+                    f"done: {sum(results.values())}/{len(results)} ok; "
+                    f"failed: {bad}",
+                    flush=True,
+                )
+
+    feeder = threading.Thread(target=feed, daemon=True)
+    feeder.start()
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        list(pool.map(worker, todo))
+        for _ in range(args.workers):
+            pool.submit(builder)
+    feeder.join()
     return 0 if all(results.values()) else 1
 
 
