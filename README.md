@@ -58,7 +58,8 @@ cfd-rgba-net-batch --dataset windsorml --runs 0-349 --out /data2/cfd-rgba-net-da
 From a raw AhmedML-family volume to volume renderings of the vortex and shear-layer classes, one command per
 method; each reads the .vtu and writes `<out>_<view>.png`, and `net` also writes `<out>_<view>_uncertainty.png`,
 the entropy of its three class probabilities over ln 3 (0 certain, 0.63 an even split between two classes, 1
-all three equally likely):
+all three equally likely). These are close-ups of the body and its near wake; `<out>_<view>_domain.png` (and
+`<out>_<view>_domain_uncertainty.png`) frame the whole grid:
 
 ```sh
 # get a case (here test_interp run 280)

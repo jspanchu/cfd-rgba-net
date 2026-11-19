@@ -15,7 +15,9 @@ view.
     (vtkGradientFilter), then resampled
 
 Writes <out>_<view>.png per view and, for net, <out>_<view>_uncertainty.png: the
-entropy of the net's three class probabilities over ln 3, drawn alone. The
+entropy of the net's three class probabilities over ln 3, drawn alone. With
+--body these are close-ups of the body and its near wake, and
+<out>_<view>_domain[_uncertainty].png frame the whole grid. The
 classes are 0 outside the core (walls and the floor), as in
 cfd-rgba-net-evaluate. Without --body, pass --H, the reference length in mesh
 units; the body is then the hole in the mesh.
@@ -344,8 +346,8 @@ def main(argv: list[str] | None = None):
     args.out.parent.mkdir(parents=True, exist_ok=True)
     config = load_config(args.render_config)
     images = render_probabilities(p, spec, config, tuple(args.views), body)
-    for view, image in images.items():
-        write_png(f"{args.out}_{view}.png", image)
+    for name, image in images.items():
+        write_png(f"{args.out}_{name}.png", image)
     step(f"rendered {', '.join(args.views)}")
 
     if args.method == "net":
@@ -361,8 +363,8 @@ def main(argv: list[str] | None = None):
             tuple(args.views),
             body,
         )
-        for view, image in images.items():
-            write_png(f"{args.out}_{view}_uncertainty.png", image)
+        for name, image in images.items():
+            write_png(f"{args.out}_{name}_uncertainty.png", image)
         step(
             "rendered uncertainty; of the core voxels, "
             f"{frac[0.05]:.3%} above 0.05, {frac[0.3]:.3%} above 0.3 "

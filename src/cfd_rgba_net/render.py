@@ -176,7 +176,9 @@ def render_probabilities(
     Returns
     -------
     dict[str, numpy.ndarray]
-        Per view, a uint8 array of shape ``(height, width, 3)``.
+        Per image, a uint8 array of shape ``(height, width, 3)``, keyed by the
+        view name, plus ``<view>_domain`` framing the whole grid when ``body``
+        is given.
     """
     config = config or load_config()
     if hasattr(probs, "detach"):
@@ -198,7 +200,7 @@ def render_volumes(
     """Render scalar volumes in [0, 1], each with its own colour and opacity
     curve, from a volume ray caster.
 
-    The volumes are in one ``vtkMultiVolume``, so each has its own colour and
+    Several volumes go in one ``vtkMultiVolume``, so each has its own colour and
     opacity map, the rays composite all of them, and the body, an opaque
     surface, hides the volume behind it. Rendering is offscreen and runs on the
     GPU (EGL when there is no X display).
@@ -223,7 +225,8 @@ def render_volumes(
     Returns
     -------
     dict[str, numpy.ndarray]
-        Per view, a uint8 array of shape ``(height, width, 3)``.
+        Per image, a uint8 array of shape ``(height, width, 3)``, keyed as in
+        ``render_probabilities``.
     """
     config = config or load_config()
     width, height = config["size"]
@@ -231,18 +234,29 @@ def render_volumes(
     win = vtkRenderWindow(off_screen_rendering=True, size=(width, height))
     win.AddRenderer(ren)
 
-    multi = vtkMultiVolume()
     mapper = vtkOpenGLGPUVolumeRayCastMapper()
-    multi.SetMapper(mapper)
-    for port, (values, feature) in enumerate(volumes):
-        vol, image = _volume(
-            values, spec, feature, config["opacity_unit_voxels"] * spec.dx
-        )
-        mapper.SetInputDataObject(port, image)
-        multi.SetVolume(vol, port)
-    ren.AddVolume(multi)
+    built = [
+        _volume(values, spec, feature, config["opacity_unit_voxels"] * spec.dx)
+        for values, feature in volumes
+    ]
+    if len(built) == 1:
+        # vtkMultiVolume misplaces a lone input (it drew the uncertainty
+        # shifted off the body), so one volume gets the mapper directly
+        vol, image = built[0]
+        mapper.SetInputDataObject(0, image)
+        vol.SetMapper(mapper)
+        ren.AddVolume(vol)
+    else:
+        multi = vtkMultiVolume()
+        multi.SetMapper(mapper)
+        for port, (vol, image) in enumerate(built):
+            mapper.SetInputDataObject(port, image)
+            multi.SetVolume(vol, port)
+        ren.AddVolume(multi)
 
-    bounds = spec.bounds
+    # Name suffix -> framed region. The whole grid shows the full wake; with a
+    # body, the unsuffixed images are close-ups of the body and its near wake.
+    frames = {"": spec.bounds}
     if body is not None:
         normals = vtkPolyDataNormals(
             input_data=body, feature_angle=40
@@ -253,19 +267,23 @@ def render_volumes(
         actor.GetProperty().SetColor(*config["body"]["color"])
         ren.AddActor(actor)
         b = body.GetBounds()
-        bounds = (b[0], b[1] + config["frame"]["wake"] * (b[1] - b[0]), *b[2:])
+        frames = {
+            "": (b[0], b[1] + config["frame"]["wake"] * (b[1] - b[0]), *b[2:]),
+            "_domain": spec.bounds,
+        }
 
     images = {}
     for view in views:
-        _camera(ren, bounds, view, width / height)
-        win.Render()
-        grab = vtkWindowToImageFilter(input=win)
-        grab.Update()
-        out = grab.GetOutput()
-        w, h, _ = out.GetDimensions()
-        images[view] = vtk_to_numpy(out.GetPointData().GetScalars()).reshape(
-            h, w, -1
-        )[::-1, :, :3]
+        for suffix, bounds in frames.items():
+            _camera(ren, bounds, view, width / height)
+            win.Render()
+            grab = vtkWindowToImageFilter(input=win)
+            grab.Update()
+            out = grab.GetOutput()
+            w, h, _ = out.GetDimensions()
+            images[view + suffix] = vtk_to_numpy(
+                out.GetPointData().GetScalars()
+            ).reshape(h, w, -1)[::-1, :, :3]
     return images
 
 

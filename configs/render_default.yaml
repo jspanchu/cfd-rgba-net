@@ -1,6 +1,6 @@
 # Defaults for cfd_rgba_net.render. Colours are RGB in [0, 1]. Pass a file with the same keys to --config.
 size: [1600, 800]               # image width, height in pixels
-background: [1.0, 1.0, 1.0]
+background: [0.08, 0.08, 0.10]
 body:
   color: [0.62, 0.64, 0.68]
 frame:
@@ -11,11 +11,11 @@ opacity_unit_voxels: 1.5
 # Opacity is 0 below the first point and constant above the last.
 features:
   vortex:
-    color: [0.90, 0.15, 0.10]
-    opacity: [[0.3, 0.0], [1.0, 0.8]]
+    color: [0.40, 0.10, 0.55]
+    opacity: [[0.3, 0.0], [1.0, 0.85]]
   shear_layer:
-    color: [0.10, 0.50, 1.00]
-    opacity: [[0.3, 0.0], [1.0, 0.8]]
+    color: [0.95, 0.75, 0.20]
+    opacity: [[0.3, 0.0], [1.0, 0.35]]
 # The net's uncertainty, drawn alone in <out>_<view>_uncertainty.png by cfd-rgba-net-infer --method net: the
 # entropy of its three class probabilities over ln 3, from 0 (certain) to 1 (all three equally likely). The
 # curve starts at 0.05, about 1 % on a second class: the net is confident almost everywhere, and a curve
