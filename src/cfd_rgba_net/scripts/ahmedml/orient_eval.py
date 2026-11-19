@@ -12,10 +12,10 @@ rest.
 Each case's features, signed distance, height, labels and core are re-oriented
 together; the features are invariant under the orientations, so they move with
 the voxels only (as in ``loader.PatchDataset.sample_patch``), and the reference
-stays exact. Scores come from ``evaluate.predict`` as it is now, with the zero
+stays exact. Scores come from ``evaluate.predict`` as it is now, with the -1
 margin and bfloat16 windows: they differ from older runs of this script, which
 tiled the windows from the grid's corner. All checkpoints must share the
-``--levels``, ``--norm`` and ``--prior`` settings.
+``--levels`` and ``--norm`` settings.
 """
 
 import argparse
@@ -108,11 +108,6 @@ def main():
         "--levels", type=int, default=5, help="resolution levels of the UNet"
     )
     ap.add_argument(
-        "--prior",
-        action="store_true",
-        help="the checkpoints were trained with --prior",
-    )
-    ap.add_argument(
         "--norm",
         default="instance",
         choices=["instance", "group", "batch"],
@@ -132,17 +127,7 @@ def main():
     ]  # the pilot's fixed 10 of the 50
     models = {}
     for path in args.checkpoints:
-        model = (
-            UNet3D(
-                rules.tau_lambda2,
-                rules.tau_omega,
-                args.levels,
-                args.norm,
-                args.prior,
-            )
-            .to(device)
-            .eval()
-        )
+        model = UNet3D(levels=args.levels, norm=args.norm).to(device).eval()
         model.load_state_dict(
             torch.load(path, map_location=device, weights_only=True)
         )
@@ -163,7 +148,7 @@ def main():
             core = core_mask(sdf > 0, h, rules, contract.n_per_H)[1]
             for ckpt, model in models.items():
                 p = predict(
-                    model, torch.from_numpy(f), device
+                    model, torch.from_numpy(rules.squash(f)), device
                 ) * torch.from_numpy(core).to(device)
                 scores[ckpt][name].append(
                     score(

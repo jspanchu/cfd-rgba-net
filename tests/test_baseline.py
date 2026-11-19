@@ -48,6 +48,19 @@ def test_baseline_thresholds_the_features_by_the_rules_inside_the_core():
     np.testing.assert_array_equal(classes, expected)
 
 
+def test_squashed_features_reproduce_the_rules_when_thresholded_at_zero():
+    u, fluid = _synthetic_field()
+    features, rules = grid_features(u, fluid, H), LabelRules.load()
+    f = rules.squash(features)
+
+    vortex = (f[0] > 0) & (f[1] > 0)
+    classes = vortex + 2 * ((f[2] > 0) & ~vortex)
+    expected = baseline_classes(features, np.ones_like(fluid), rules)
+    assert np.abs(f).max() <= 1
+    # float round-off only flips voxels sitting on a threshold
+    assert (classes == expected).mean() > 0.999
+
+
 def test_features_are_invariant_under_orientation():
     u, fluid = _synthetic_field()
     # rotate 90° about z: the grid axes (x, y) -> (-y, x), and so do the

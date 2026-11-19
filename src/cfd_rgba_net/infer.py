@@ -4,15 +4,25 @@ The pipeline runs raw volume mesh -> classes on the voxel grid -> one PNG per
 view.
 
     cfd-rgba-net-infer volume_280.vtu --body ahmed_280.stl --method net \
-        --checkpoint runs/case_feat_prior_100/best.pt --out out/run280_net
-        [--views side top rear]
+        --checkpoint runs/pilot/best.pt --out out/run280_net
+        [--views side top rear] [--tau-lambda2 0.5 --tau-omega 2.0]
 
 --method picks what is drawn, each from the .vtu alone:
 
     net        the net's probabilities from the grid features (resample, finite
-    differences on the grid) baseline   the label rules on the same grid
-    features labels     the label rules on the ingredients of the native mesh
-    (vtkGradientFilter), then resampled
+    differences on the grid), squashed with --tau-lambda2 and --tau-omega
+    (default: the label rules' thresholds) baseline   the label rules on the
+    same grid features labels     the label rules on the ingredients of the
+    native mesh (vtkGradientFilter), then resampled
+
+The net also runs on inputs the user has already computed and squashed into
+[-1, 1], one channel per name in --arrays, from the point arrays of a .vti on
+the voxel grid:
+
+    cfd-rgba-net-infer inputs.vti --arrays a b c \
+        --checkpoint runs/pilot/best.pt --out out/mine [--body body.stl]
+
+All of its voxels are scored, and --body is only drawn.
 
 Writes <out>_<view>.png per view and, for net, <out>_<view>_uncertainty.png: the
 entropy of the net's three class probabilities over ln 3, drawn alone. With
@@ -26,6 +36,7 @@ units; the body is then the hole in the mesh.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import math
 import resource
 import time
@@ -33,7 +44,9 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from vtkmodules.util.numpy_support import vtk_to_numpy
 from vtkmodules.vtkCommonDataModel import vtkPolyData, vtkUnstructuredGrid
+from vtkmodules.vtkIOXML import vtkXMLImageDataReader
 
 from .baseline import default_device, grid_features
 from .config import CaseConfig, Contract, LabelRules
@@ -179,6 +192,49 @@ def case_ingredients(
     )
 
 
+def read_inputs(path: Path, names: list[str]) -> tuple[torch.Tensor, ImageSpec]:
+    """Read the net's inputs from the point arrays of a VTK image file.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The ``.vti`` file, with the same spacing along every axis.
+    names : list[str]
+        The point arrays, in channel order. A vector array gives one channel per
+        component.
+
+    Returns
+    -------
+    inputs : torch.Tensor
+        Float32 ``(n_in, nx, ny, nz)``.
+    spec : ImageSpec
+        The voxel grid of the image.
+
+    Raises
+    ------
+    ValueError
+        If the spacing is not the same along every axis, or an array is
+        missing.
+    """
+    reader = vtkXMLImageDataReader(file_name=str(path))
+    reader.Update()
+    image = reader.GetOutput()
+    spacing = image.GetSpacing()
+    if not np.allclose(spacing, spacing[0]):
+        raise ValueError(f"{path}: spacing {spacing} is not isotropic")
+    dims = image.GetDimensions()
+    channels = []
+    for name in names:
+        a = image.GetPointData().GetArray(name)
+        if a is None:
+            raise ValueError(f"{path}: no point array {name!r}")
+        # x varies fastest, as save_vti writes it
+        a = vtk_to_numpy(a).reshape(-1, a.GetNumberOfComponents())
+        channels += [c.reshape(dims, order="F") for c in a.T]
+    spec = ImageSpec(tuple(image.GetOrigin()), spacing[0], dims)
+    return torch.from_numpy(np.stack(channels).astype(np.float32)), spec
+
+
 def normalized_entropy(p: torch.Tensor) -> torch.Tensor:
     """Measure how uncertain the net is per voxel.
 
@@ -226,7 +282,16 @@ def main(argv: list[str] | None = None):
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("volume", type=Path, help="the case's volume mesh (.vtu)")
+    ap.add_argument(
+        "volume",
+        type=Path,
+        help="the case's volume mesh (.vtu), or the net's inputs (.vti)",
+    )
+    ap.add_argument(
+        "--arrays",
+        nargs="+",
+        help="point arrays of a .vti volume, in the net's channel order",
+    )
     ap.add_argument(
         "--method",
         choices=("net", "baseline", "labels"),
@@ -236,7 +301,19 @@ def main(argv: list[str] | None = None):
     ap.add_argument(
         "--checkpoint",
         type=Path,
-        help="model weights (UNet3D, 5 levels, rule prior); --method net only",
+        help="model weights (UNet3D, 5 levels); --method net only",
+    )
+    ap.add_argument(
+        "--tau-lambda2",
+        type=float,
+        help="vortex threshold the .vtu's inputs are squashed with "
+        "(default: the label rules'); --method net only",
+    )
+    ap.add_argument(
+        "--tau-omega",
+        type=float,
+        help="shear-layer threshold the .vtu's inputs are squashed with "
+        "(default: the label rules'); --method net only",
     )
     ap.add_argument(
         "--out",
@@ -287,7 +364,10 @@ def main(argv: list[str] | None = None):
         help="VTK threads (default: all cores)",
     )
     args = ap.parse_args(argv)
-    if args.body is None and args.H is None:
+    presquashed = args.volume.suffix == ".vti"
+    if presquashed and (args.method != "net" or not args.arrays):
+        ap.error("a .vti volume needs --method net and --arrays")
+    if not presquashed and args.body is None and args.H is None:
         ap.error("give --body or --H")
     if args.method == "net" and args.checkpoint is None:
         ap.error("--method net needs --checkpoint")
@@ -314,28 +394,67 @@ def main(argv: list[str] | None = None):
         if args.body
         else None
     )
-    ug = read_volume(args.volume, cfg.field_names())
-    step(f"read {args.volume.name}: {ug.GetNumberOfCells():,} cells")
-    if args.method == "labels":
-        q, spec, core = case_ingredients(ug, cfg, contract, rules, body, args.H)
-        step(
-            f"native-mesh ingredients on a {spec.dims} grid, dx = {spec.dx:.6g}"
-        )
+    if presquashed:
+        q, spec = read_inputs(args.volume, args.arrays)
+        core = torch.ones(spec.dims, dtype=torch.bool)
+        step(f"read {q.shape[0]} input channels on a {spec.dims} grid")
+        if q.abs().max() > 1:
+            raise SystemExit(f"{args.volume}: inputs must lie in [-1, 1]")
     else:
-        q, spec, core = case_features(ug, cfg, contract, rules, body, args.H)
-        step(f"grid features on a {spec.dims} grid, dx = {spec.dx:.6g}")
-    del ug
+        ug = read_volume(args.volume, cfg.field_names())
+        step(f"read {args.volume.name}: {ug.GetNumberOfCells():,} cells")
+        if args.method == "labels":
+            q, spec, core = case_ingredients(
+                ug, cfg, contract, rules, body, args.H
+            )
+            step(
+                f"native-mesh ingredients on a {spec.dims} grid, "
+                f"dx = {spec.dx:.6g}"
+            )
+        else:
+            q, spec, core = case_features(
+                ug, cfg, contract, rules, body, args.H
+            )
+            step(f"grid features on a {spec.dims} grid, dx = {spec.dx:.6g}")
+        del ug
 
     if args.method == "net":
+        if not presquashed:
+            # the user's thresholds replace the rules' for the net's inputs
+            # only; the core still comes from the rules
+            taus = {
+                k: v
+                for k, v in (
+                    ("tau_lambda2", args.tau_lambda2),
+                    ("tau_omega", args.tau_omega),
+                )
+                if v is not None
+            }
+            squash_rules = dataclasses.replace(rules, **taus)
+            q = torch.from_numpy(squash_rules.squash(q.numpy()))
+            step(
+                f"squashed with tau_lambda2 = {squash_rules.tau_lambda2}, "
+                f"tau_omega = {squash_rules.tau_omega}"
+            )
         device = default_device()
-        model = (
-            UNet3D(rules.tau_lambda2, rules.tau_omega, levels=5, prior=True)
-            .to(device)
-            .eval()
+        state = torch.load(
+            args.checkpoint, map_location=device, weights_only=True
         )
-        model.load_state_dict(
-            torch.load(args.checkpoint, map_location=device, weights_only=True)
+        # the checkpoint's first and last convolutions give n_in and n_out
+        n_in, n_out = (
+            state["enc.0.0.weight"].shape[1],
+            state["head.weight"].shape[0],
         )
+        if n_in != q.shape[0]:
+            raise SystemExit(
+                f"{args.checkpoint} takes {n_in} inputs, got {q.shape[0]}"
+            )
+        if n_out != 3:  # the renders draw none, vortex and shear layer
+            raise SystemExit(
+                f"{args.checkpoint} has {n_out} classes; rendering needs 3"
+            )
+        model = UNet3D(n_in, n_out, levels=5).to(device).eval()
+        model.load_state_dict(state)
         p = predict(model, q, device).cpu() * core
         step(f"probabilities on {device}")
     else:

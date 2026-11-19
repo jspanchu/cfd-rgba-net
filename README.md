@@ -67,9 +67,19 @@ hf download jspanchu/ahmedml run_280/volume_280.vtu run_280/ahmed_280.stl --repo
 
 common="data/run_280/volume_280.vtu --body data/run_280/ahmed_280.stl --dataset configs/datasets/ahmedml.yaml
         --contract configs/contract_v1.yaml --rules configs/label_rules_v1.yaml --views side top rear"
-cfd-rgba-net-infer $common --method net --checkpoint runs/case_feat_prior_100/best.pt --out out/run280_net
+cfd-rgba-net-infer $common --method net --checkpoint runs/pilot/best.pt --out out/run280_net
 cfd-rgba-net-infer $common --method baseline --out out/run280_baseline  # the rules on the grid's gradients
 cfd-rgba-net-infer $common --method labels --out out/run280_labels      # the rules on the native mesh's gradients
+```
+
+The net (`UNet3D(n_in=3, n_out=3)`) takes features in [-1, 1], with -1 meaning "no feature", and does no
+thresholding of its own. From a .vtu, `infer` squashes lambda2\*, Q\* and |omega|\* around the thresholds
+`--tau-lambda2` and `--tau-omega` (default: those of `label_rules_v1.yaml`, which the pilot trains with, see
+`LabelRules.squash`). To feed the net your own features, compute and squash them into [-1, 1] on a
+voxel grid, save them as point arrays of a .vti, and name them in channel order:
+
+```sh
+cfd-rgba-net-infer inputs.vti --arrays a b c --checkpoint runs/pilot/best.pt --out out/mine [--body body.stl]
 ```
 
 ## Tests

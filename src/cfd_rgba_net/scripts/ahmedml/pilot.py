@@ -133,17 +133,6 @@ def main():
         help="UNet normalisation",
     )
     ap.add_argument(
-        "--prior",
-        action="store_true",
-        help="add the rules' margins to the logits",
-    )
-    ap.add_argument(
-        "--prior-scale",
-        type=float,
-        default=4.0,
-        help="starting scale of the --prior margins",
-    )
-    ap.add_argument(
         "--warmup-epochs",
         type=int,
         default=0,
@@ -251,14 +240,8 @@ def main():
         return tuple(metrics(pool(runs)["all"][c])["iou"] for c in CLASS_NAMES)
 
     seed_everything(args.seed)
-    model = UNet3D(
-        rules.tau_lambda2,
-        rules.tau_omega,
-        args.levels,
-        args.norm,
-        args.prior,
-        args.prior_scale,
-    ).to(device)
+    # 3 squashed rule quantities in, none / vortex / shear layer out
+    model = UNet3D(3, 3, args.levels, args.norm).to(device)
     if args.resume:
         model.load_state_dict(
             torch.load(args.resume, map_location=device, weights_only=True)

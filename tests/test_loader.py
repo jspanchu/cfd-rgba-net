@@ -9,6 +9,7 @@ import torch
 import zarr
 from torch.utils.data import DataLoader
 
+from cfd_rgba_net.config import LabelRules
 from cfd_rgba_net.geometry import ImageSpec
 from cfd_rgba_net.io import save_case_zarr
 from cfd_rgba_net.loader import PatchDataset
@@ -82,7 +83,9 @@ def test_same_seed_gives_the_same_first_20_patches(dataset):
     assert not torch.equal(a[0]["inputs"], other[0]["inputs"])
 
 
-def test_unaugmented_patch_is_the_stores_features_around_the_centre(tmp_path):
+def test_unaugmented_patch_is_the_squashed_features_around_the_centre(
+    tmp_path,
+):
     rng = np.random.default_rng(1)
     (tmp_path / "t.yaml").write_text(
         "dataset: T\nfiles: {}\nfields: {velocity: [U], pressure: [p]}\n"
@@ -104,15 +107,20 @@ def test_unaugmented_patch_is_the_stores_features_around_the_centre(tmp_path):
     features = zarr.open_group(tmp_path / "t_run1.zarr", mode="r")["features"][
         :
     ]
+    rules = LabelRules.load()
     # the patch is 96 wide and centred on the voxel; the store is smaller, so it
-    # is padded
+    # is padded with -1
     lo = centre - 48
     src = tuple(slice(max(l, 0), min(l + 96, N)) for l in lo)
     dst = tuple(slice(s.start - l, s.stop - l) for s, l in zip(src, lo))
     assert patch.shape == (3, 96, 96, 96)
     np.testing.assert_array_equal(
-        patch[(slice(None),) + dst], features[(slice(None),) + src]
+        patch[(slice(None),) + dst],
+        rules.squash(features[(slice(None),) + src]),
     )
+    outside = np.ones(patch.shape[1:], bool)
+    outside[dst] = False
+    assert (patch[:, outside] == -1).all()
 
 
 def test_centres_are_a_third_each_and_a_run_without_vortex_gives_its_share_away(

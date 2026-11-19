@@ -216,6 +216,36 @@ class LabelRules:
         shear = (omega > self.tau_omega) & ~vortex & core
         return vortex, shear
 
+    def squash(self, features: np.ndarray) -> np.ndarray:
+        """Squash lambda2*, Q* and |omega|* into the net's inputs in [-1, 1].
+
+        Each quantity goes through a tanh around its rule's threshold, so it is
+        0 on the threshold and positive on the side the rule selects.
+
+        Parameters
+        ----------
+        features : numpy.ndarray
+            ``(3, nx, ny, nz)``: lambda2*, Q* and |omega|*, in the order of
+            ``FEATURE_NAMES``.
+
+        Returns
+        -------
+        numpy.ndarray
+            Float32 ``(3, nx, ny, nz)``: ``tanh((-lambda2* - tau_lambda2) /
+            tau_lambda2)``, ``tanh(Q* / tau_lambda2)`` and ``tanh((|omega|* -
+            tau_omega) / tau_omega)``.
+        """
+        lam2, Q, omega = np.asarray(features, np.float32)
+        return np.tanh(
+            np.stack(
+                [
+                    (-lam2 - self.tau_lambda2) / self.tau_lambda2,
+                    Q / self.tau_lambda2,
+                    (omega - self.tau_omega) / self.tau_omega,
+                ]
+            )
+        ).astype(np.float32)
+
     def wall_erosion_voxels(self, n_per_H: int) -> int:
         """Convert the wall erosion distance to a whole number of voxels.
 

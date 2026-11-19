@@ -10,7 +10,8 @@ the Zarr stores of one split.
 Each patch is centred on a vortex voxel, a shear-layer voxel or a random fluid
 voxel, a third of the time each, then given one of the 48 axis-aligned
 orientations. The net's inputs are the store's ``features`` (lambda2*, Q* and
-|omega|* on the grid), raw: the net squashes them itself.
+|omega|* on the grid) squashed with the label rules' thresholds
+(``LabelRules.squash``), and -1 outside the grid.
 """
 
 from __future__ import annotations
@@ -280,9 +281,9 @@ class PatchDataset(IterableDataset):
         Returns
         -------
         dict[str, torch.Tensor]
-            ``inputs`` ``(3, 96, 96, 96)`` float32, the store's raw
-            ``features``; ``labels`` ``(2, 96, 96, 96)`` uint8; and ``core``
-            ``(96, 96, 96)`` bool, where the labels count.
+            ``inputs`` ``(3, 96, 96, 96)`` float32, the store's squashed
+            ``features``, -1 outside the grid; ``labels`` ``(2, 96, 96, 96)``
+            uint8; and ``core`` ``(96, 96, 96)`` bool, where the labels count.
         """
         run, _, centre = self.sample_centre(rng)
         store = zarr.open_group(self.stores[run], mode="r")
@@ -299,7 +300,9 @@ class PatchDataset(IterableDataset):
         )
 
         inner = (...,) + (slice(1, -1),) * 3
-        f, _ = read_crop(get_array(store, "features"), lo + 1, PATCH)
+        f, in_grid = read_crop(get_array(store, "features"), lo + 1, PATCH)
+        f = self.rules.squash(f)
+        f[:, ~in_grid] = -1.0  # the net's "no feature"
         labels, core = labels[inner], core[inner[1:]]
         # the features are invariant under the orientations, so they move with
         # the voxels and nothing else

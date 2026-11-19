@@ -35,11 +35,12 @@ from .loader import PATCH
 from .model import UNet3D
 
 STEP = PATCH // 2  # windows overlap by half
-# Zero margin around the case. Without it the grid's low edges, above all the
-# floor, sit on a window's edge, where the net lacks the zero context that
-# training patches at the grid edge have. On the 10 fixed validation runs, a net
-# trained with the pilot's settings scored a far-field shear-layer IoU of 0.05
-# without the margin and 0.42 with it. Half a stride keeps every grid edge away
+# Margin of -1 ("no feature") around the case. Without it the grid's low edges,
+# above all the floor, sit on a window's edge, where the net lacks the padding
+# context that training patches at the grid edge have. On the 10 fixed
+# validation runs, a net trained with the pilot's settings (then on raw
+# features, padded with 0) scored a far-field shear-layer IoU of 0.05 without
+# the margin and 0.42 with it. Half a stride keeps every grid edge away
 # from the window edges.
 PAD = STEP // 2
 WINDOW_BATCH = 8  # windows per forward pass
@@ -57,20 +58,21 @@ def predict(
 ) -> torch.Tensor:
     """Run the net over a whole case with overlapping windows.
 
-    The case gets a zero margin of ``PAD`` voxels on every side, and windows are
-    zero-padded where they leave that. Their predictions are blended with a
-    Gaussian weight (sigma = 1/8 of the window), so a window's centre counts
-    more than its edges. The margin is cut off again before the function
-    returns. On a GPU the windows run in bfloat16, as the training steps do.
+    The case gets a margin of ``PAD`` voxels of -1, the net's "no feature", on
+    every side, and windows are padded with -1 where they leave that. Their
+    predictions are blended with a Gaussian weight (sigma = 1/8 of the window),
+    so a window's centre counts more than its edges. The margin is cut off
+    again before the function returns. On a GPU the windows run in bfloat16,
+    as the training steps do.
 
     Parameters
     ----------
     model : torch.nn.Module
-        The network in eval mode, on ``device``: it returns logits ``(1, 3, D,
-        H, W)``.
+        The network in eval mode, on ``device``: it returns logits ``(N,
+        n_out, D, H, W)``.
     x : torch.Tensor
-        The case's raw float32 ``features``, ``(3, nx, ny, nz)``. The padded
-        copy stays on ``x``'s device, and each batch of windows moves to
+        The case's float32 inputs in [-1, 1], ``(n_in, nx, ny, nz)``. The
+        padded copy stays on ``x``'s device, and each batch of windows moves to
         ``device``.
     device : torch.device
         Where the windows run and their predictions are blended. Blending on a
@@ -80,8 +82,7 @@ def predict(
     Returns
     -------
     torch.Tensor
-        Float32 probabilities of none, vortex and shear layer, ``(3, nx, ny,
-        nz)``, on ``device``.
+        Float32 class probabilities, ``(n_out, nx, ny, nz)``, on ``device``.
     """
     dims = x.shape[1:]
     inner = (slice(None),) + tuple(
@@ -90,16 +91,13 @@ def predict(
     size = [
         PATCH + STEP * -(-max(n + 2 * PAD - PATCH, 0) // STEP) for n in dims
     ]  # sides the windows tile exactly
-    xp = x.new_zeros(x.shape[0], *size)
+    xp = x.new_full((x.shape[0], *size), -1.0)
     xp[inner] = x
 
     g = torch.arange(PATCH) - (PATCH - 1) / 2
     g = torch.exp(-(g**2) / (2 * (PATCH / 8) ** 2))
     weight = (g[:, None, None] * g[None, :, None] * g[None, None, :]).to(device)
-    total, norm = (
-        torch.zeros(3, *size, device=device),
-        torch.zeros(*size, device=device),
-    )
+    total, norm = None, torch.zeros(*size, device=device)
     wins = [
         tuple(slice(c, c + PATCH) for c in corner)
         for corner in itertools.product(
@@ -114,9 +112,12 @@ def predict(
             device.type, torch.bfloat16, enabled=device.type == "cuda"
         ):
             logits = model(inputs)
+        if total is None:  # n_out is known from the first batch
+            total = torch.zeros(logits.shape[1], *size, device=device)
         for win, p in zip(batch, logits.float().softmax(1)):
             total[(slice(None),) + win] += p * weight
             norm[win] += weight
+    assert total is not None  # the padded case holds at least one window
     return (total / norm)[inner]
 
 
@@ -287,7 +288,8 @@ def evaluate_run(
     contract : Contract
         The input contract.
     rules : LabelRules
-        The label thresholds, which define the core.
+        The label thresholds, which define the core and squash the net's
+        inputs.
     device : torch.device
         Where the net runs.
     baseline : bool, optional
@@ -313,9 +315,10 @@ def evaluate_run(
     features = read_array(store, "features")
     out = {}
     if model is not None:
-        p = predict(
-            model, torch.from_numpy(features), device
-        ) * torch.from_numpy(core).to(device)  # 0 outside the core
+        x = rules.squash(features)
+        p = predict(model, torch.from_numpy(x), device) * torch.from_numpy(
+            core
+        ).to(device)  # 0 outside the core
         out["net"] = score(
             p.argmax(0).cpu().numpy(), ref, core, sdf, surface_dice
         )
@@ -409,11 +412,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--levels", type=int, default=5, help="resolution levels of the UNet"
     )
-    ap.add_argument(
-        "--prior",
-        action="store_true",
-        help="the net adds the rules' margins to its logits",
-    )
     args = ap.parse_args(argv)
     if not (args.checkpoint or args.baseline):
         ap.error("give --checkpoint, --baseline or both")
@@ -435,18 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = None
     if args.checkpoint:
-        # the prior's scales are learned, so they come from the checkpoint, not
-        # from a flag
-        model = (
-            UNet3D(
-                rules.tau_lambda2,
-                rules.tau_omega,
-                args.levels,
-                prior=args.prior,
-            )
-            .to(device)
-            .eval()
-        )
+        model = UNet3D(levels=args.levels).to(device).eval()
         model.load_state_dict(
             torch.load(args.checkpoint, map_location=device, weights_only=True)
         )
@@ -458,9 +445,7 @@ def main(argv: list[str] | None = None) -> int:
         checkpoint_sha256=file_sha256(args.checkpoint)
         if args.checkpoint
         else None,
-        model={"levels": args.levels, "prior": args.prior}
-        if args.checkpoint
-        else None,
+        model={"levels": args.levels} if args.checkpoint else None,
     )
 
     args.out.mkdir(parents=True, exist_ok=True)
