@@ -13,7 +13,8 @@ Example: run the overfit test
         --out runs/overfit
 
 By default it trains on the 100-run pilot subset of the train split (``--subset
-368`` takes all of it) and validates on a fixed 10 runs of the validation split.
+368`` takes all of it) and validates on 10 runs of the validation split
+(``--val-count`` changes it).
 ``--overfit RUN`` trains and validates on that one run instead.
 """
 
@@ -105,6 +106,12 @@ def main():
         help="keep the stored orientation of every patch",
     )
     ap.add_argument("--max-epochs", type=int, default=TrainConfig.max_epochs)
+    ap.add_argument(
+        "--val-count",
+        type=int,
+        default=10,
+        help="number of evenly spaced runs in validation split (max 50)",
+    )
     ap.add_argument("--val-every", type=int, default=TrainConfig.val_every)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
@@ -197,9 +204,12 @@ def main():
         train_runs = df.run[
             (df.split == "train") & (df["subset"] <= args.subset)
         ].tolist()
-        val_runs = df.run[df.split == "val"].tolist()[
-            ::5
-        ]  # a fixed 10 of the 50
+        val_runs = df.run[df.split == "val"].tolist()
+        if args.val_count < 1 or args.val_count > 50:
+            ap.error("val_count must be >0 and <=50")
+        val_run_step = 50 // args.val_count
+        val_runs = val_runs[::val_run_step]
+        val_runs = val_runs[0 : args.val_count]
     cfg = TrainConfig(
         seed=args.seed,
         max_epochs=args.max_epochs,
