@@ -139,6 +139,12 @@ def main():
         help="epochs of linear learning-rate warm-up",
     )
     ap.add_argument(
+        "--steps-per-epoch",
+        type=int,
+        default=TrainConfig.steps_per_epoch,
+        help="no. of training steps per epoch",
+    )
+    ap.add_argument(
         "--batch-size",
         type=int,
         default=TrainConfig.batch_size,
@@ -204,6 +210,7 @@ def main():
         max_epochs=args.max_epochs,
         val_every=args.val_every,
         batch_size=args.batch_size,
+        steps_per_epoch=args.steps_per_epoch,
         compile=args.compile,
         patience=args.patience,
         start_epoch=args.start_epoch,
